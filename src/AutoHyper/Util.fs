@@ -15,8 +15,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 *)
 
-module Util 
-#nowarn "59"
+module Util
 
 open System
 open System.Collections.Generic
@@ -24,13 +23,16 @@ open System.Collections.Generic
 /// If set to true, we raise exceptions
 let DEBUG = false
 
-/// Given a number n, computes all lists of booleans of length n 
+exception AutoHyperException of String
+
+
+/// Given a number n, computes all lists of booleans of length n
 let rec computeBooleanPowerSet n =
     if n = 0 then
         Seq.singleton []
     else
-        let r = computeBooleanPowerSet (n-1)
-        Seq.append (Seq.map (fun x -> true::x) r) (Seq.map (fun x -> false::x) r)
+        let r = computeBooleanPowerSet (n - 1)
+        Seq.append (Seq.map (fun x -> true :: x) r) (Seq.map (fun x -> false :: x) r)
 
 /// Compute the cartesian product of a list of sets
 let rec cartesianProduct (LL: list<seq<'a>>) =
@@ -43,78 +45,69 @@ let rec cartesianProduct (LL: list<seq<'a>>) =
         }
 
 /// Compute the powerset of a given set
-let powerset (s : Set<'a>) =
-    let asList = Set.toList s 
+let powerset (s: Set<'a>) =
+    let asList = Set.toList s
 
-    let rec computeFiniteChoices (A : list<'a>) =
+    let rec computeFiniteChoices (A: list<'a>) =
         match A with
-            | [] -> Seq.singleton Set.empty
-            | x::xs ->
-                let r = computeFiniteChoices xs
-                Seq.append r (Seq.map (fun y -> Set.add x y) r)
+        | [] -> Seq.singleton Set.empty
+        | x :: xs ->
+            let r = computeFiniteChoices xs
+            Seq.append r (Seq.map (fun y -> Set.add x y) r)
 
     computeFiniteChoices asList
 
 /// Given a map A -> set<B> compute all possible maps A -> B that are obtained by picking some element from that set for each key in A
-let cartesianProductMap (m : Map<'A, Set<'B>>) =
+let cartesianProductMap (m: Map<'A, Set<'B>>) =
     let keysAsList = Seq.toList m.Keys
 
     keysAsList
     |> Seq.toList
     |> List.map (fun x -> m.[x] |> seq)
     |> cartesianProduct
-    |> Seq.map (fun x -> 
-        List.zip keysAsList x
-        |> Map
-        )
+    |> Seq.map (fun x -> List.zip keysAsList x |> Map)
 
-let rec combineStringsWithSeperator (s: String) (l: list<String>) = 
-    match l with 
+let rec combineStringsWithSeperator (s: String) (l: list<String>) =
+    match l with
     | [] -> ""
-    | [x] -> x
-    | x::y::xs -> 
-        x + s + combineStringsWithSeperator s (y::xs)
+    | [ x ] -> x
+    | x :: y :: xs -> x + s + combineStringsWithSeperator s (y :: xs)
 
-let dictToMap (d : Dictionary<'A, 'B>) = 
-    d 
-    |> Seq.map (fun x -> x.Key, x.Value)
-    |> Map.ofSeq
+let dictToMap (d: Dictionary<'A, 'B>) =
+    d |> Seq.map (fun x -> x.Key, x.Value) |> Map.ofSeq
 
 /// Parser for variables used in HyperLTL specifications
-module ParserUtil = 
+module ParserUtil =
     open FParsec
 
-    let escapedStringParser : Parser<string, unit> =
-        let escapedCharParser : Parser<string, unit> =  
+    let escapedStringParser: Parser<string, unit> =
+        let escapedCharParser: Parser<string, unit> =
             anyOf "\"\\/bfnrt"
-            |>> fun x -> 
+            |>> fun x ->
                 match x with
                 | 'b' -> "\b"
                 | 'f' -> "\u000C"
                 | 'n' -> "\n"
                 | 'r' -> "\r"
                 | 't' -> "\t"
-                | c   -> string c
+                | c -> string c
 
         between
             (pchar '"')
             (pchar '"')
             (stringsSepBy (manySatisfy (fun c -> c <> '"' && c <> '\\')) (pstring "\\" >>. escapedCharParser))
 
-    
 
 
-module SubprocessUtil = 
-    type SubprocessResult = 
-        {
-            Stdout : String 
-            Stderr : String 
-            ExitCode : int
-        }
 
-    let executeSubprocess (cmd: string) (arg: string) = 
-        let psi =
-            System.Diagnostics.ProcessStartInfo(cmd, arg)
+module SubprocessUtil =
+    type SubprocessResult =
+        { Stdout: String
+          Stderr: String
+          ExitCode: int }
+
+    let executeSubprocess (cmd: string) (arg: string) =
+        let psi = System.Diagnostics.ProcessStartInfo(cmd, arg)
 
         psi.UseShellExecute <- false
         psi.RedirectStandardOutput <- true
@@ -129,10 +122,6 @@ module SubprocessUtil =
         p.BeginOutputReadLine()
         p.WaitForExit()
 
-        {
-            SubprocessResult.Stdout = output.ToString();
-            Stderr = error.ToString()
-            ExitCode = p.ExitCode
-        }
-
-      
+        { SubprocessResult.Stdout = output.ToString()
+          Stderr = error.ToString()
+          ExitCode = p.ExitCode }

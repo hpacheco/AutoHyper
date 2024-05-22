@@ -15,46 +15,34 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 *)
 
-module RunConfiguration 
+module RunConfiguration
 
 open System
 
-exception AnalysisException of String 
-
 /// Records the run configuration (the location) of each supported automaton tool
-type SolverConfiguration = 
-    {
-        MainPath : String
-        AutfiltPath: option<String>
-        Ltl2tgbaPath: option<String>
-        BaitJarPath: option<String>
-        RabitJarPath: option<String>
-        ForkliftJarPath : option<String>
-    }
+type SolverConfiguration =
+    { MainPath: String
+      AutfiltPath: option<String>
+      Ltl2tgbaPath: option<String>
+      BaitJarPath: option<String>
+      RabitJarPath: option<String>
+      ForkliftJarPath: option<String> }
 
-    static member Default = 
-        {
-            MainPath = "./"
-            AutfiltPath = Option.None
-            Ltl2tgbaPath = Option.None
-            BaitJarPath = Option.None
-            RabitJarPath = Option.None
-            ForkliftJarPath  = Option.None
-        }
+    static member Default =
+        { MainPath = "./"
+          AutfiltPath = Option.None
+          Ltl2tgbaPath = Option.None
+          BaitJarPath = Option.None
+          RabitJarPath = Option.None
+          ForkliftJarPath = Option.None }
 
 
-type ModelCheckingOptions = 
-    {
-        ComputeBisimulation : bool
-    }
-      
+type ModelCheckingOptions = { ComputeBisimulation: bool }
+
 /// A configuration summarizes the location to each solver and a printing function that is called for all non-fatal printouts
-type Configuration = 
-    {
-        SolverConfig : SolverConfiguration
-        ModelCheckingOptions: ModelCheckingOptions
-        Logger : String -> unit
-    }
+type Configuration =
+    { SolverConfig: SolverConfiguration
+      ModelCheckingOptions: ModelCheckingOptions
+      Logger: String -> unit }
 
-    member this.LoggerN s = 
-        this.Logger (s + "\n")
+    member this.LoggerN s = this.Logger(s + "\n")

@@ -17,7 +17,7 @@
 
 module ExplicitAutomaton
 
-open System 
+open System
 open System.IO
 
 open Util
@@ -27,143 +27,118 @@ open FsOmegaLib.NBA
 
 open FsOmegaLib.Operations
 
-type ExplicitNBA<'T, 'L when 'T: comparison> = 
-    {
-        States : Set<'T>
-        InitialState : 'T
-        Alphabet: list<'L>
-        Edges: Map<'T, list<int * 'T>>
-        AcceptingStates : Set<'T>
-    }
+type ExplicitNBA<'T, 'L when 'T: comparison> =
+    { States: Set<'T>
+      InitialState: 'T
+      Alphabet: list<'L>
+      Edges: Map<'T, list<int * 'T>>
+      AcceptingStates: Set<'T> }
 
-module ExplicitNBA = 
-    let convertStatesToInt (nba : ExplicitNBA<'T, 'L>) = 
-        let idDict = 
-            nba.States
-            |> Seq.mapi (fun i x -> x, i)
+module ExplicitNBA =
+    let convertStatesToInt (nba: ExplicitNBA<'T, 'L>) =
+        let idDict = nba.States |> Seq.mapi (fun i x -> x, i) |> Map.ofSeq
+
+        { ExplicitNBA.States = nba.States |> Set.map (fun x -> idDict.[x])
+
+          InitialState = idDict.[nba.InitialState]
+
+          Alphabet = nba.Alphabet
+
+          Edges =
+            nba.Edges
+            |> Map.toSeq
+            |> Seq.map (fun (k, v) -> idDict.[k], List.map (fun (g, s) -> g, idDict.[s]) v)
             |> Map.ofSeq
 
-        {
-            ExplicitNBA.States = 
-                nba.States |> Set.map (fun x -> idDict.[x]);
+          AcceptingStates = nba.AcceptingStates |> Set.map (fun x -> idDict.[x]) }
 
-            InitialState = idDict.[nba.InitialState]
+    let toBAString (stateStringer: 'T -> String) (alphStringer: 'L -> String) (nba: ExplicitNBA<'T, 'L>) =
+        let s = new StringWriter()
 
-            Alphabet = nba.Alphabet;
+        s.WriteLine(stateStringer (nba.InitialState))
 
-            Edges = 
-                nba.Edges 
-                |> Map.toSeq
-                |> Seq.map 
-                    (fun (k, v) -> 
-                        idDict.[k], List.map (fun (g, s) -> g, idDict.[s]) v
-                    ) 
-                |> Map.ofSeq;
+        for n in nba.States do
+            for (l, n') in nba.Edges.[n] do
+                s.WriteLine(
+                    alphStringer (nba.Alphabet.[l])
+                    + ","
+                    + stateStringer (n)
+                    + "->"
+                    + stateStringer (n')
+                )
 
-            AcceptingStates = 
-                nba.AcceptingStates |> Set.map (fun x -> idDict.[x]);
-        }
-
-    let toBAString (stateStringer : 'T -> String) (alphStringer : 'L -> String) (nba : ExplicitNBA<'T, 'L>) = 
-        let s = new StringWriter() 
-
-        s.WriteLine (stateStringer(nba.InitialState))
-
-        for n in nba.States do 
-            for (l, n') in nba.Edges.[n] do 
-                s.WriteLine (alphStringer (nba.Alphabet.[l]) + "," + stateStringer(n) + "->" + stateStringer(n'))
-
-        for n in nba.AcceptingStates do 
-            s.WriteLine (stateStringer(n))
+        for n in nba.AcceptingStates do
+            s.WriteLine(stateStringer (n))
 
         s.ToString()
 
-    let convertFromSymbolicNBA (nba : NBA<'T, 'L>) = 
-        let alphabet = 
-            Util.computeBooleanPowerSet (nba.APs.Length)
-            |> Seq.toList
+    let convertFromSymbolicNBA (nba: NBA<'T, 'L>) =
+        let alphabet = Util.computeBooleanPowerSet (nba.APs.Length) |> Seq.toList
 
-        let idDict = 
-            nba.States
-            |> Seq.mapi (fun i x -> x, i + 1)
-            |> Map.ofSeq
+        let idDict = nba.States |> Seq.mapi (fun i x -> x, i + 1) |> Map.ofSeq
 
-        let newStates = set [0..nba.States.Count]
-        
-        let newEdges = 
-            nba.Skeleton.Edges 
+        let newStates = set [ 0 .. nba.States.Count ]
+
+        let newEdges =
+            nba.Skeleton.Edges
             |> Map.toSeq
-            |> Seq.map (fun (k, v) -> 
-                let sucs = 
-                    v 
-                    |> List.map (fun (g, t) -> 
-                        [0..alphabet.Length - 1]
-                        |> List.choose (fun i -> 
-                            if DNF.eval (fun j -> alphabet.[i].[j]) g then 
-                                Some (i, idDict.[t])
-                            else 
-                                None
-                            )
-                    )
+            |> Seq.map (fun (k, v) ->
+                let sucs =
+                    v
+                    |> List.map (fun (g, t) ->
+                        [ 0 .. alphabet.Length - 1 ]
+                        |> List.choose (fun i ->
+                            if DNF.eval (fun j -> alphabet.[i].[j]) g then
+                                Some(i, idDict.[t])
+                            else
+                                None))
                     |> List.concat
-                
-                idDict.[k], sucs
-                )
+
+                idDict.[k], sucs)
             |> Map.ofSeq
 
-        let initSucs = 
+        let initSucs =
             nba.InitialStates
             |> Set.toList
-            |> List.map (fun s -> 
+            |> List.map (fun s ->
                 nba.Edges.[s]
-                |> List.map (fun (g, t) -> 
-                    [0..alphabet.Length - 1]
-                    |> List.choose (fun i -> 
-                        if DNF.eval (fun j -> alphabet.[i].[j]) g then 
-                            Some (i, idDict.[t])
-                        else 
-                            None
-                        )
-                )
-                |> List.concat
-            )
+                |> List.map (fun (g, t) ->
+                    [ 0 .. alphabet.Length - 1 ]
+                    |> List.choose (fun i ->
+                        if DNF.eval (fun j -> alphabet.[i].[j]) g then
+                            Some(i, idDict.[t])
+                        else
+                            None))
+                |> List.concat)
             |> List.concat
-            
-        let newEdges = 
-            newEdges
-            |> Map.add 0 initSucs
 
-        let newAcceptingStates = 
-            nba.AcceptingStates
-            |> Set.map (fun x -> idDict.[x])
-            |> Set.add 0
+        let newEdges = newEdges |> Map.add 0 initSucs
 
-        {
-            ExplicitNBA.States = newStates
-            InitialState = 0
-            Edges = newEdges
-            Alphabet = alphabet
-            AcceptingStates = newAcceptingStates
-        }
+        let newAcceptingStates =
+            nba.AcceptingStates |> Set.map (fun x -> idDict.[x]) |> Set.add 0
 
-module AutomataChecks = 
+        { ExplicitNBA.States = newStates
+          InitialState = 0
+          Edges = newEdges
+          Alphabet = alphabet
+          AcceptingStates = newAcceptingStates }
+
+module AutomataChecks =
 
     exception private AutomatonCheckException of FsOmegaLibError
 
-    let checkNBAContainmentBait debug mainPath baitPath (enba1 : ExplicitNBA<int, 'L>) (enba2 : ExplicitNBA<int, 'L>)  = 
-        try 
-            assert(enba1.Alphabet = enba2.Alphabet)
+    let checkNBAContainmentBait debug mainPath baitPath (enba1: ExplicitNBA<int, 'L>) (enba2: ExplicitNBA<int, 'L>) =
+        try
+            assert (enba1.Alphabet = enba2.Alphabet)
 
-            let alphMapper = 
-                enba1.Alphabet
-                |> List.mapi (fun i x -> x, "l" + string i)
-                |> Map.ofList
+            let alphMapper =
+                enba1.Alphabet |> List.mapi (fun i x -> x, "l" + string i) |> Map.ofList
 
             let s1 = ExplicitNBA.toBAString string (fun x -> alphMapper.[x]) enba1
             let s2 = ExplicitNBA.toBAString string (fun x -> alphMapper.[x]) enba2
 
-            let path1 = Path.Combine [|mainPath; "aut1.ba"|]
-            let path2 = Path.Combine [|mainPath; "aut2.ba"|]
+            let path1 = Path.Combine [| mainPath; "aut1.ba" |]
+            let path2 = Path.Combine [| mainPath; "aut2.ba" |]
 
             File.WriteAllText(path1, s1)
             File.WriteAllText(path2, s2)
@@ -171,41 +146,59 @@ module AutomataChecks =
             let arg = "-jar " + baitPath + " -a " + path1 + " -b " + path2
             let res = Util.SubprocessUtil.executeSubprocess "java" arg
 
-            match res with 
-            | {ExitCode = 0; Stderr = ""; Stdout = c} | {ExitCode = 1; Stderr = ""; Stdout = c} -> 
-                if c.Contains "Inclusion holds: true" then 
+            match res with
+            | { ExitCode = 0
+                Stderr = ""
+                Stdout = c }
+            | { ExitCode = 1
+                Stderr = ""
+                Stdout = c } ->
+                if c.Contains "Inclusion holds: true" then
                     FsOmegaLib.Operations.AutomataOperationResult.Success true
-                elif c.Contains "Inclusion holds: false" then 
+                elif c.Contains "Inclusion holds: false" then
                     FsOmegaLib.Operations.AutomataOperationResult.Success false
-                else 
-                    FsOmegaLib.Operations.AutomataOperationResult.Fail {Info = $"Error by BAIT"; DebugInfo = $"Unexpected output by BAIT; (containment); %s{c}"}
-            | {ExitCode = exitCode; Stderr = stderr}  -> 
-                if exitCode <> 0 && exitCode <> 1 then 
-                    raise <| AutomatonCheckException {Info = $"Unexpected exit code by BAIT"; DebugInfo = $"Unexpected exit code by BAIT; (containsment); %i{exitCode}"}
-                else   
-                    raise <| AutomatonCheckException {Info = $"Error by BAIT"; DebugInfo = $"Error by BAIT; (containment); %s{stderr}"}
+                else
+                    FsOmegaLib.Operations.AutomataOperationResult.Fail
+                        { Info = $"Error by BAIT"
+                          DebugInfo = $"Unexpected output by BAIT; (containment); %s{c}" }
+            | { ExitCode = exitCode; Stderr = stderr } ->
+                if exitCode <> 0 && exitCode <> 1 then
+                    raise
+                    <| AutomatonCheckException
+                        { Info = $"Unexpected exit code by BAIT"
+                          DebugInfo = $"Unexpected exit code by BAIT; (containsment); %i{exitCode}" }
+                else
+                    raise
+                    <| AutomatonCheckException
+                        { Info = $"Error by BAIT"
+                          DebugInfo = $"Error by BAIT; (containment); %s{stderr}" }
 
-        with 
-        | _ when debug -> reraise() 
-        | AutomatonCheckException err -> 
-            Fail (err)
-        | e -> 
-            Fail {Info = $"Unexpected error"; DebugInfo = $"Unexpected error; (BAIT, containment); %s{e.Message}"}
+        with
+        | _ when debug -> reraise ()
+        | AutomatonCheckException err -> Fail(err)
+        | e ->
+            Fail
+                { Info = $"Unexpected error"
+                  DebugInfo = $"Unexpected error; (BAIT, containment); %s{e.Message}" }
 
-    let checkNBAContainmentRabit (debug: bool) mainPath rabitPath (enba1 : ExplicitNBA<'T, 'L>) (enba2 : ExplicitNBA<'T, 'L>)  = 
+    let checkNBAContainmentRabit
+        (debug: bool)
+        mainPath
+        rabitPath
+        (enba1: ExplicitNBA<'T, 'L>)
+        (enba2: ExplicitNBA<'T, 'L>)
+        =
         try
-            assert(enba1.Alphabet = enba2.Alphabet)
+            assert (enba1.Alphabet = enba2.Alphabet)
 
-            let alphMapper = 
-                enba1.Alphabet
-                |> List.mapi (fun i x -> x, "l" + string i)
-                |> Map.ofList
+            let alphMapper =
+                enba1.Alphabet |> List.mapi (fun i x -> x, "l" + string i) |> Map.ofList
 
             let s1 = ExplicitNBA.toBAString string (fun x -> alphMapper.[x]) enba1
             let s2 = ExplicitNBA.toBAString string (fun x -> alphMapper.[x]) enba2
 
-            let path1 = Path.Combine [|mainPath; "aut1.ba"|]
-            let path2 = Path.Combine [|mainPath; "aut2.ba"|]
+            let path1 = Path.Combine [| mainPath; "aut1.ba" |]
+            let path2 = Path.Combine [| mainPath; "aut2.ba" |]
 
             File.WriteAllText(path1, s1)
             File.WriteAllText(path2, s2)
@@ -214,41 +207,59 @@ module AutomataChecks =
 
             let res = Util.SubprocessUtil.executeSubprocess "java" arg
 
-            match res with 
-            | {ExitCode = 0; Stderr = ""; Stdout = c} | {ExitCode = 1; Stderr = ""; Stdout = c} -> 
-                if c.Contains "Not included." then 
+            match res with
+            | { ExitCode = 0
+                Stderr = ""
+                Stdout = c }
+            | { ExitCode = 1
+                Stderr = ""
+                Stdout = c } ->
+                if c.Contains "Not included." then
                     FsOmegaLib.Operations.AutomataOperationResult.Success false
-                elif c.Contains "Included." then 
+                elif c.Contains "Included." then
                     FsOmegaLib.Operations.AutomataOperationResult.Success true
-                else 
-                    FsOmegaLib.Operations.AutomataOperationResult.Fail {Info = $"Error by RABIT"; DebugInfo = $"Unexpected output by RABIT; (containment); %s{c}"}
-            | {ExitCode = exitCode; Stderr = stderr}  -> 
-                if exitCode <> 0 && exitCode <> 1 then 
-                    raise <| AutomatonCheckException {Info = $"Unexpected exit code by RABIT"; DebugInfo = $"Unexpected exit code by RABIT;  (containsment); %i{exitCode}"}
-                else   
-                    raise <| AutomatonCheckException {Info = $"Error by RABIT"; DebugInfo = $"Error by RABIT; (containment); %s{stderr}"}
+                else
+                    FsOmegaLib.Operations.AutomataOperationResult.Fail
+                        { Info = $"Error by RABIT"
+                          DebugInfo = $"Unexpected output by RABIT; (containment); %s{c}" }
+            | { ExitCode = exitCode; Stderr = stderr } ->
+                if exitCode <> 0 && exitCode <> 1 then
+                    raise
+                    <| AutomatonCheckException
+                        { Info = $"Unexpected exit code by RABIT"
+                          DebugInfo = $"Unexpected exit code by RABIT;  (containsment); %i{exitCode}" }
+                else
+                    raise
+                    <| AutomatonCheckException
+                        { Info = $"Error by RABIT"
+                          DebugInfo = $"Error by RABIT; (containment); %s{stderr}" }
 
-        with 
-        | _ when debug -> reraise() 
-        | AutomatonCheckException err -> 
-            Fail (err)
-        | e -> 
-            Fail {Info = $"Unexpected error"; DebugInfo = $"Unexpected error; (RABIT, containment); %s{e.Message}"}
+        with
+        | _ when debug -> reraise ()
+        | AutomatonCheckException err -> Fail(err)
+        | e ->
+            Fail
+                { Info = $"Unexpected error"
+                  DebugInfo = $"Unexpected error; (RABIT, containment); %s{e.Message}" }
 
-    let checkNBAContainmentForklift debug mainPath forkliftPath (enba1 : ExplicitNBA<'T, 'L>) (enba2 : ExplicitNBA<'T, 'L>)  = 
-        try 
-            assert(enba1.Alphabet = enba2.Alphabet)
+    let checkNBAContainmentForklift
+        debug
+        mainPath
+        forkliftPath
+        (enba1: ExplicitNBA<'T, 'L>)
+        (enba2: ExplicitNBA<'T, 'L>)
+        =
+        try
+            assert (enba1.Alphabet = enba2.Alphabet)
 
-            let alphMapper = 
-                enba1.Alphabet
-                |> List.mapi (fun i x -> x, "l" + string i)
-                |> Map.ofList
+            let alphMapper =
+                enba1.Alphabet |> List.mapi (fun i x -> x, "l" + string i) |> Map.ofList
 
             let s1 = ExplicitNBA.toBAString string (fun x -> alphMapper.[x]) enba1
             let s2 = ExplicitNBA.toBAString string (fun x -> alphMapper.[x]) enba2
 
-            let path1 = Path.Combine [|mainPath; "aut1.ba"|]
-            let path2 = Path.Combine [|mainPath; "aut2.ba"|]
+            let path1 = Path.Combine [| mainPath; "aut1.ba" |]
+            let path2 = Path.Combine [| mainPath; "aut2.ba" |]
 
             File.WriteAllText(path1, s1)
             File.WriteAllText(path2, s2)
@@ -256,23 +267,37 @@ module AutomataChecks =
             let arg = "-jar " + forkliftPath + " " + path1 + " " + path2
             let res = Util.SubprocessUtil.executeSubprocess "java" arg
 
-            match res with 
-            | {ExitCode = 0; Stderr = ""; Stdout = c} | {ExitCode = 1; Stderr = ""; Stdout = c} -> 
-                if c.Contains "OUTPUT:false" then 
+            match res with
+            | { ExitCode = 0
+                Stderr = ""
+                Stdout = c }
+            | { ExitCode = 1
+                Stderr = ""
+                Stdout = c } ->
+                if c.Contains "OUTPUT:false" then
                     FsOmegaLib.Operations.AutomataOperationResult.Success false
-                elif c.Contains "OUTPUT:true" then 
+                elif c.Contains "OUTPUT:true" then
                     FsOmegaLib.Operations.AutomataOperationResult.Success true
-                else 
-                    FsOmegaLib.Operations.AutomataOperationResult.Fail {Info = $"Error by FORKLIFT"; DebugInfo = $"Unexpected output by FORKLIFT; (containment); %s{c}"}
-            | {ExitCode = exitCode; Stderr = stderr}  -> 
-                if exitCode <> 0 && exitCode <> 1 then 
-                    raise <| AutomatonCheckException {Info = $"Unexpected exit code by FORKLIFT"; DebugInfo = $"Unexpected exit code by FORKLIFT;  (containsment); %i{exitCode}"}
-                else   
-                    raise <| AutomatonCheckException {Info = $"Error by FORKLIFT"; DebugInfo = $"Error by FORKLIFT; (containment); %s{stderr}"}
-   
-        with 
-        | _ when debug -> reraise() 
-        | AutomatonCheckException err -> 
-            Fail (err)
-        | e -> 
-            Fail {Info = $"Unexpected error"; DebugInfo = $"Unexpected error; (FORKLIFT, containment); %s{e.Message}"}
+                else
+                    FsOmegaLib.Operations.AutomataOperationResult.Fail
+                        { Info = $"Error by FORKLIFT"
+                          DebugInfo = $"Unexpected output by FORKLIFT; (containment); %s{c}" }
+            | { ExitCode = exitCode; Stderr = stderr } ->
+                if exitCode <> 0 && exitCode <> 1 then
+                    raise
+                    <| AutomatonCheckException
+                        { Info = $"Unexpected exit code by FORKLIFT"
+                          DebugInfo = $"Unexpected exit code by FORKLIFT;  (containsment); %i{exitCode}" }
+                else
+                    raise
+                    <| AutomatonCheckException
+                        { Info = $"Error by FORKLIFT"
+                          DebugInfo = $"Error by FORKLIFT; (containment); %s{stderr}" }
+
+        with
+        | _ when debug -> reraise ()
+        | AutomatonCheckException err -> Fail(err)
+        | e ->
+            Fail
+                { Info = $"Unexpected error"
+                  DebugInfo = $"Unexpected error; (FORKLIFT, containment); %s{e.Message}" }
