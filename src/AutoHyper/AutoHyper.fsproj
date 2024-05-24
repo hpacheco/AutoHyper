@@ -7,11 +7,17 @@
   <ItemGroup>
     <Compile Include="Util.fs" />
     <Compile Include="JSON.fs" />
-    <Compile Include="RunConfiguration.fs" />
+    <Compile Include="Configuration.fs" />
+    <Compile Include="AtomExpression.fs" />
+    <Compile Include="HyperQPTL.fs" />
     <Compile Include="HyperLTL.fs" />
     <Compile Include="ExplicitAutomaton.fs" />
     <Compile Include="ProductConstruction.fs" />
+    <Compile Include="AutomataUtil.fs" />
+    <Compile Include="ModelCheckingUtil.fs" />
     <Compile Include="ModelChecking.fs" />
+    <Compile Include="Translation.fs" />
+    <Compile Include="InstanceParsing.fs" />
     <Compile Include="CommandLineParser.fs" />
     <Compile Include="ModelCheckingEntryPoint.fs" />
     <Compile Include="Program.fs" />

@@ -21,102 +21,226 @@ open System
 open System.IO
 
 open Util
-open RunConfiguration
+open Configuration
 open ModelChecking
 
+open HyperQPTL
 open CommandLineParser
-open ModelCheckingEntryPoint
-
-let private run (args: array<string>) =
-
-    let swtotal = System.Diagnostics.Stopwatch()
-    swtotal.Start()
-
-    let args =
-        if args.Length = 0 then
-            // In case no command line arguments are given, we assume the user wants the help message
-            [| "--help" |]
-        else
-            args
-
-    // Parse the command line args
-    let cmdArgs =
-        match CommandLineParser.parseCommandLineArguments (Array.toList args) with
-        | Result.Ok x -> x
-        | Result.Error e -> raise <| AutoHyperException $"%s{e}"
-
-    // By convention the paths.json file is located in the same directory as the HyPA executable
-    let configPath =
-        System.IO.Path.Join
-            [| System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
-               "paths.json" |]
 
 
-    // Check if the path to the config file is valid , i.e., the file exists
-    if System.IO.FileInfo(configPath).Exists |> not then
-        raise
-        <| AutoHyperException "The paths.json file does not exist in the same directory as the executable"
-
-    // Parse the config File
-    let configContent =
+let private writeFormulaAndSystemString
+    (systemOutputPaths : list<String>)
+    formulaOutputPath
+    (tsStringList : list<String>)
+    (formulaString : String)
+    =
+    (systemOutputPaths, tsStringList)
+    ||> List.zip
+    |> List.iter (fun (file, tsString) ->
         try
-            File.ReadAllText configPath
+            File.WriteAllText(file, tsString)
         with _ ->
-            raise <| AutoHyperException "Could not open paths.json file"
+            raise <| AutoHyperException $"Could not write to file %s{file}"
+    )
 
-    let logger s =
-        if cmdArgs.DebugOutputs then
-            printf $"%s{s}"
+    try
+        File.WriteAllText(formulaOutputPath, formulaString)
+    with _ ->
+        raise <| AutoHyperException $"Could not write to file %s{formulaOutputPath}"
 
-    let solverConfig = CommandLineParser.parseConfigFile configContent
 
-    if solverConfig.AutfiltPath.IsSome then
-        if
-            solverConfig.AutfiltPath.Value <> ""
-            && (System.IO.FileInfo(solverConfig.AutfiltPath.Value).Exists |> not)
-        then
-            raise <| AutoHyperException "The path to the spot's autfilt is incorrect"
+let private run (args : array<string>) =
+    let swTotal = System.Diagnostics.Stopwatch()
+    let sw = System.Diagnostics.Stopwatch()
+    swTotal.Start()
 
-    if solverConfig.Ltl2tgbaPath.IsSome then
-        if
-            solverConfig.Ltl2tgbaPath.Value <> ""
-            && (System.IO.FileInfo(solverConfig.Ltl2tgbaPath.Value).Exists |> not)
-        then
-            raise <| AutoHyperException "The path to the spot's ltl2tgba is incorrect"
+    sw.Restart()
 
-    if solverConfig.RabitJarPath.IsSome then
-        if System.IO.FileInfo(solverConfig.RabitJarPath.Value).Exists |> not then
-            raise <| AutoHyperException "The path to the RABIT jar is incorrect"
+    let cmdArgs =
+        CommandLineParser.parseCommandLineArguments (Array.toList args)
+        |> Result.defaultWith (fun err -> raise <| AutoHyperException $"%s{err}")
 
-    if solverConfig.BaitJarPath.IsSome then
-        if System.IO.FileInfo(solverConfig.BaitJarPath.Value).Exists |> not then
-            raise <| AutoHyperException "The path to the BAIT jar is incorrect"
 
-    if solverConfig.ForkliftJarPath.IsSome then
-        if System.IO.FileInfo(solverConfig.ForkliftJarPath.Value).Exists |> not then
-            raise <| AutoHyperException "The path to the FORKLIFT jar is incorrect"
-
-    let mcOptions =
-        { ModelCheckingOptions.ComputeBisimulation = cmdArgs.ComputeBisimulation }
+    let solverConfig = Configuration.getSolverConfiguration ()
 
     let config =
-        { Configuration.SolverConfig = solverConfig
-          ModelCheckingOptions = mcOptions
-          Logger = logger }
+        {
+            Configuration.SolverConfig = solverConfig
+            ModelCheckingOptions =
+                {
+                    ModelCheckingOptions.ComputeBisimulation = cmdArgs.ComputeBisimulation
+                    ComputeWitnesses = cmdArgs.ComputeWitnesses
+                    IntermediateAutomatonSimplification = cmdArgs.IntermediateAutomatonSimplification
+                    BlockProduct = true
 
-    let mode = Option.defaultValue (INCL SPOT) cmdArgs.Mode
+                    Mode = cmdArgs.Mode
+                }
+            Logger =
+                {
+                    Logger.Log =
+                        fun s ->
+                            if cmdArgs.LogPrintouts then
+                                printf $"%s{s}"
+                }
+            RaiseExceptions = cmdArgs.RaiseExceptions
+        }
 
-    match cmdArgs.ExecMode with
-    | None -> raise <| AutoHyperException "Must specify an exeuction mode"
-    | Some(ExplictSystem(systemPaths, propPath)) -> explictSystemVerification config systemPaths propPath mode
-    | Some(BooleanProgram(systemPaths, propPath)) -> booleanProgramVerification config systemPaths propPath mode
+    config.Logger.LogN $"========================= Initialization ========================="
 
-    | Some(NusmvSystem(systemPaths, propPath)) -> nuSMVSystemVerification config systemPaths propPath mode
+    config.Logger.LogN
+        $"Read command line args and solver config. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
 
-    swtotal.Stop()
+    let systemInputPaths, formulaInputPath =
+        cmdArgs.InputFiles
+        |> Option.defaultWith (fun () -> raise <| AutoHyperException "No input files given")
 
-    config.LoggerN
-        $"Total time: %i{swtotal.ElapsedMilliseconds}ms (~=%.2f{double (swtotal.ElapsedMilliseconds) / 1000.0}s)"
+    let tsList, formula =
+        match cmdArgs.InputType with
+        | SymbolicSystem ->
+            config.Logger.LogN $"Start parsing model-checking instance (--nusmv)..."
+            sw.Restart()
+
+            let systemList, formula =
+                InstanceParsing.readAndParseSymbolicInstance systemInputPaths formulaInputPath
+
+            config.Logger.LogN
+                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+
+            config.Logger.LogN $"Start translation to explicit-state system..."
+            sw.Restart()
+
+            let tsList = Translation.convertSymbolicSystemInstance systemList formula
+
+            config.Logger.LogN
+                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+
+            tsList, formula
+
+        | BooleanProgramSystem ->
+            config.Logger.LogN $"Start parsing model-checking instance (--bp)..."
+            sw.Restart()
+
+            let programList, formula =
+                InstanceParsing.readAndParseBooleanProgramInstance systemInputPaths formulaInputPath
+
+            config.Logger.LogN
+                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+
+            config.Logger.LogN $"Start translation to explicit-state system..."
+            sw.Restart()
+
+            let tsList, formula = Translation.convertBooleanProgramInstance programList formula
+
+            config.Logger.LogN
+                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+
+            tsList, formula
+
+        | ExplicitSystem ->
+            config.Logger.LogN $"Start parsing model-checking instance (--explicit)..."
+            sw.Restart()
+
+            let tsList, formula =
+                InstanceParsing.readAndParseExplicitInstance systemInputPaths formulaInputPath
+
+            config.Logger.LogN
+                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+
+            tsList, formula
+
+    let traceVarList = HyperQPTL.quantifiedTraceVariables formula
+
+    if tsList.Length <> 1 && tsList.Length <> traceVarList.Length then 
+        raise <| AutoHyperException "The number of systems does not match the number of quantified traces"
+
+    let tsList =
+        if config.ModelCheckingOptions.ComputeBisimulation then
+            // Compute bisimulation quotient
+            sw.Restart()
+
+            config.Logger.LogN $"Start computation of bisimulation quotients..."
+
+            let bisim =
+                tsList
+                |> List.map (fun ts ->
+                    TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts
+                    |> fst
+                )
+
+            config.Logger.LogN(
+                $"done | Time %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) | System sizes: ["
+                + (tsList |> List.map (fun ts -> string ts.States.Count) |> String.concat ",")
+                + "]"
+            )
+
+            bisim
+        else
+            tsList
+
+
+    let tsMap =
+        if tsList.Length = 1 then
+            traceVarList |> List.map (fun x -> x, tsList.[0]) |> Map.ofList
+        else
+            (traceVarList, tsList) ||> List.zip |> Map.ofList
+            
+    match ModelCheckingUtil.findErrorOnModelCheckingInstance tsMap formula with
+    | None -> ()
+    | Some msg -> raise <| AutoHyperException $"Error in model and/or formula: %s{msg}"
+
+    config.Logger.LogN $"=================================================="
+    config.Logger.LogN ""
+
+    match cmdArgs.WriteExplicitInstance with
+    | None -> ()
+    | Some(systemOutputPaths, formulaOutputPath) ->
+        config.Logger.LogN $"========================= Writing to file ========================="
+
+        if systemOutputPaths.Length <> systemInputPaths.Length then
+            raise
+            <| AutoHyperException "The number of output files must match the number of input"
+
+        let tsStringList =
+            tsList
+            |> List.map (TransitionSystemLib.TransitionSystem.TransitionSystem.print id)
+
+        let formulaString = HyperQPTL.print id formula
+
+        writeFormulaAndSystemString systemOutputPaths formulaOutputPath tsStringList formulaString
+
+        config.Logger.LogN $"=================================================="
+        config.Logger.LogN ""
+
+
+    if cmdArgs.Verify then
+        let tsMap, formula = ModelCheckingUtil.convertToHyperLTL tsMap formula
+
+        let res, _ = ModelChecking.modelCheck config tsMap formula
+
+        if res.IsSat then printfn "SAT" else printfn "UNSAT"
+
+        if cmdArgs.ComputeWitnesses then
+            match res.WitnessPaths with
+            | None ->
+                ()
+            | Some lassoMap ->
+                // We can assume that each DNF in this lasso is SAT
+
+                let printList (l : list<int>) =
+                    l |> List.map string |> String.concat " " |> (fun x -> "(" + x + ")")
+
+                lassoMap.Keys
+                |> Seq.iter (fun pi ->
+                    let lasso = lassoMap.[pi]
+                    printfn $""
+                    printfn $"%s{pi}"
+                    printfn $"Prefix: %s{printList lasso.Prefix}"
+                    printfn $"Loop: %s{printList lasso.Loop}"
+                )
+
+
+    config.Logger.LogN
+        $"Total Time: %i{swTotal.ElapsedMilliseconds} ms (%.4f{double (swTotal.ElapsedMilliseconds) / 1000.0} s)"
 
     0
 
@@ -125,12 +249,19 @@ let main args =
     try
         run args
     with
-    | _ when Util.DEBUG -> reraise ()
     | AutoHyperException err ->
         printfn "Error during the analysis:"
-        printfn "%s" err
+        printfn $"{err}"
+
+        if Util.DEBUG then 
+            reraise()
+
         exit -1
     | e ->
         printfn "Unexpected Error during the analysis:"
-        printfn "%s" e.Message
+        printfn $"{e.Message}" 
+
+        if Util.DEBUG then 
+            reraise()
+
         exit -1

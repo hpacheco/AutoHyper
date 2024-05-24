@@ -38,14 +38,14 @@ module JSON =
         | JList l ->
             l
             |> List.map (fun x -> toString x)
-            |> Util.combineStringsWithSeperator ", "
+            |> String.concat ", "
             |> fun x -> "[" + x + "]"
 
         | JObject m ->
             m
             |> Map.toList
             |> List.map (fun (k, v) -> "\"" + k + "\": " + toString v)
-            |> Util.combineStringsWithSeperator ", "
+            |> String.concat ", "
             |> fun x -> "{" + x + "}"
 
     let lookup s (json: Json) =
@@ -129,12 +129,18 @@ module Parser =
 
         let unicodeEscape =
             pstring "u"
-            >>. pipe4 hex hex hex hex (fun h3 h2 h1 h0 ->
-                let hex2int c = (int c &&& 15) + (int c >>> 6) * 9
+            >>. pipe4
+                hex
+                hex
+                hex
+                hex
+                (fun h3 h2 h1 h0 ->
+                    let hex2int c = (int c &&& 15) + (int c >>> 6) * 9
 
-                (hex2int h3) * 4096 + (hex2int h2) * 256 + (hex2int h1) * 16 + hex2int h0
-                |> char
-                |> string)
+                    (hex2int h3) * 4096 + (hex2int h2) * 256 + (hex2int h1) * 16 + hex2int h0
+                    |> char
+                    |> string
+                )
 
         between
             (pstring "\"")
@@ -167,14 +173,15 @@ module Parser =
 
     do
         jsonParserRef.Value <-
-            choice
-                [ objectParser
-                  listParser
-                  stringParser
-                  numberParser
-                  trueParser
-                  falseParser
-                  nullParser ]
+            choice [
+                objectParser
+                listParser
+                stringParser
+                numberParser
+                trueParser
+                falseParser
+                nullParser
+            ]
 
     let parseJsonString str =
         let p = spaces >>. jsonParser .>> spaces .>> eof

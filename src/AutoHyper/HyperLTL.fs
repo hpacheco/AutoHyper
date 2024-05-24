@@ -19,70 +19,81 @@ module HyperLTL
 
 open FsOmegaLib.LTL
 
-open System
-open System.IO
+open AtomExpression
+open HyperQPTL
 
-type TraceQuantifierType =
-    | FORALL
-    | EXISTS
+type TraceVariable = string
 
-    member this.Flip =
-        match this with
-        | FORALL -> EXISTS
-        | EXISTS -> FORALL
-
-type HyperLTL<'L when 'L: comparison> =
-    { QuantifierPrefix: list<TraceQuantifierType>
-      LTLMatrix: LTL<'L * int> }
+type HyperLTL<'L when 'L : comparison> =
+    {
+        QuantifierPrefix : list<QuantifierType * TraceVariable>
+        LTLMatrix : LTL<AtomExpression<'L * TraceVariable>>
+    }
 
 module HyperLTL =
-    let isConsistent (hyperltl: HyperLTL<'L>) =
-        hyperltl.LTLMatrix
-        |> LTL.allAtoms
-        |> Set.forall (fun (_, i) -> i <= hyperltl.QuantifierPrefix.Length)
+    let quantifiedTraceVariables (formula : HyperLTL<'L>) =
+        formula.QuantifierPrefix |> List.map snd
 
-    let print (varNames: 'L -> String) (hyperltl: HyperLTL<'L>) =
-        let strWriter = new StringWriter()
+    let map f (formula : HyperLTL<'L>) =
+        {
+            QuantifierPrefix = formula.QuantifierPrefix
+            LTLMatrix = formula.LTLMatrix |> LTL.map (AtomExpression.map (fun (x, pi) -> f x, pi))
+        }
 
-        for t in hyperltl.QuantifierPrefix do
-            match t with
-            | FORALL -> strWriter.Write("forall ")
-            | EXISTS -> strWriter.Write("exists ")
+    exception private FoundError of string
 
-        let varStringer (x, i) = "\"" + varNames x + "\"_" + string (i)
+    let findError (formula : HyperLTL<'L>) =
+        let traceVars = quantifiedTraceVariables formula
 
-        strWriter.Write(LTL.printInSpotFormat varStringer hyperltl.LTLMatrix)
+        try
+            traceVars
+            |> List.groupBy id
+            |> List.iter (fun (pi, l) ->
+                if List.length l > 1 then
+                    raise <| FoundError $"Trace variable {pi} is used more than once"
+            )
 
-        strWriter.ToString()
+            LTL.allAtoms formula.LTLMatrix
+            |> Set.iter (fun x ->
+                x
+                |> AtomExpression.allVars
+                |> Set.iter (fun (_, pi) ->
+                    if List.contains pi traceVars |> not then
+                        raise
+                        <| FoundError $"Trace variable '{pi}' is used but not defined in the prefix"
+                )
+            )
 
-type NamedHyperLTL<'L when 'L: comparison> =
-    { QuantifierPrefix: list<TraceQuantifierType * String>
-      LTLMatrix: LTL<'L * String> }
+            None
 
-module NamedHyperLTL =
-    let toHyperLTL (nhyperltl: NamedHyperLTL<'L>) =
-        let names = nhyperltl.QuantifierPrefix |> List.map snd
+        with FoundError msg ->
+            Some msg
 
-        let nameMap = names |> List.mapi (fun i n -> n, i) |> Map.ofList
+    let print (varNames : 'L -> string) (formula : HyperLTL<'L>) =
+        let prefixString =
+            formula.QuantifierPrefix
+            |> List.map (fun (q, pi) -> 
+                match q with
+                | FORALL -> "forall " + pi + ". "
+                | EXISTS -> "exists " + pi + ". "
+            )
+            |> String.concat " "
 
-        { HyperLTL.QuantifierPrefix = nhyperltl.QuantifierPrefix |> List.map fst
-          LTLMatrix = nhyperltl.LTLMatrix |> LTL.map (fun (x, n) -> (x, nameMap.[n])) }
+        let varStringer (x, pi) = "{" + varNames x + "}_" + pi
 
-    let print (varNames: 'L -> String) (nhyperltl: NamedHyperLTL<'L>) =
-        let strWriter = new StringWriter()
+        let expressionStringer e =
+            match e with
+            | Variable x ->
+                // Single variable, print directly with parenthesis
+                varStringer x
+            | _ -> "[" + AtomExpression.print varStringer e + "]"
 
-        for t in nhyperltl.QuantifierPrefix do
-            match t with
-            | FORALL, x -> strWriter.Write("forall " + x + ".")
-            | EXISTS, x -> strWriter.Write("exists " + x + ".")
+        let ltlString = LTL.printInSpotFormat expressionStringer formula.LTLMatrix
 
-        let varStringer (x, i) = "\"" + varNames x + "\"_" + i
+        prefixString + " " + ltlString
 
-        strWriter.Write(LTL.printInSpotFormat varStringer nhyperltl.LTLMatrix)
-
-        strWriter.ToString()
-
-let extractBlocks (qf: list<TraceQuantifierType>) =
+(*
+let extractBlocks (qf : list<TraceQuantifierType>) =
     let rec helper t count q =
         match q with
         | [] -> [ count ]
@@ -93,134 +104,4 @@ let extractBlocks (qf: list<TraceQuantifierType>) =
                 count :: helper x 1 xs
 
     helper qf.[0] 0 qf
-
-
-
-
-
-module SymbolicHyperLTL =
-    open TransitionSystemLib.SymbolicSystem
-
-    type RelationalAtom =
-        | UnaryPred of Expression * int
-        | RelationalEq of Expression * int * Expression * int
-
-    type SymbolicHyperLTL =
-        { QuantifierPrefix: list<TraceQuantifierType>
-          LTLMatrix: LTL<RelationalAtom> }
-
-    type NamedRelationalAtom =
-        | NamedUnaryPred of Expression * String
-        | NamedRelationalEq of Expression * String * Expression * String
-
-
-    type NamedSymbolicHyperLTL =
-        { QuantifierPrefix: list<TraceQuantifierType * String>
-          LTLMatrix: LTL<NamedRelationalAtom> }
-
-    module NamedSymbolicHyperLTL =
-
-        let toSymbolicHyperLTL (f: NamedSymbolicHyperLTL) =
-            let names = f.QuantifierPrefix |> List.map snd
-
-            let nameMap = names |> List.mapi (fun i n -> n, i) |> Map.ofList
-
-            { SymbolicHyperLTL.QuantifierPrefix = f.QuantifierPrefix |> List.map fst
-              LTLMatrix =
-                f.LTLMatrix
-                |> LTL.map (fun x ->
-                    match x with
-                    | NamedUnaryPred(e, n) -> UnaryPred(e, nameMap.[n])
-                    | NamedRelationalEq(e1, n1, e2, n2) -> RelationalEq(e1, nameMap.[n1], e2, nameMap.[n2])) }
-
-module Parser =
-    open FParsec
-
-    let private keywords = [ "X"; "G"; "F"; "U"; "W"; "R" ]
-
-    let traceVariableParser =
-        attempt (
-            pipe2
-                letter
-                (manyChars (letter <|> digit))
-                //(manyChars letter)
-                (fun x y -> string (x) + y)
-            >>= fun s -> if List.contains s keywords then fail "" else preturn s
-        )
-
-    let namedPrefixParser =
-        let eParser =
-            skipString "exists " >>. spaces >>. traceVariableParser .>> spaces .>> pchar '.'
-            |>> fun x -> EXISTS, x
-
-        let uParser =
-            skipString "forall " >>. spaces >>. traceVariableParser .>> spaces .>> pchar '.'
-            |>> fun x -> FORALL, x
-
-        spaces >>. many1 ((eParser <|> uParser) .>> spaces)
-
-    let private namedHyperltlParser (atomParser: Parser<'T, unit>) =
-        let ap: Parser<'T * String, unit> =
-            atomParser .>> pchar '_' .>>. traceVariableParser
-
-        pipe2 namedPrefixParser (FsOmegaLib.LTL.Parser.ltlParser ap) (fun x y ->
-            { NamedHyperLTL.QuantifierPrefix = x
-              LTLMatrix = y })
-
-    let parseNamedHyperLTL (atomParser: Parser<'T, unit>) s =
-        let full = namedHyperltlParser atomParser .>> spaces .>> eof
-        let res = run full s
-
-        match res with
-        | Success(res, _, _) -> Result.Ok res
-        | Failure(err, _, _) -> Result.Error err
-
-    // ####################################################################
-    // Parsing for NuSMV HyperLTL HyperLTL properties
-
-    let private namedSymbolicHyperltlParser =
-        let indexedExpressionParser =
-            tuple2
-                (skipChar '{'
-                 >>. spaces
-                 >>. TransitionSystemLib.SymbolicSystem.Parser.expressionParser
-                 .>> spaces
-                 .>> skipChar '}')
-                (spaces >>. skipChar '_' >>. spaces >>. traceVariableParser)
-
-        let unaryAtomParser = indexedExpressionParser |>> SymbolicHyperLTL.NamedUnaryPred
-
-        let relationalAtomParser =
-            pipe2
-                (indexedExpressionParser .>> spaces .>> skipChar '=')
-                (spaces >>. indexedExpressionParser)
-                (fun (e1, pi1) (e2, pi2) -> SymbolicHyperLTL.NamedRelationalEq(e1, pi1, e2, pi2))
-
-        let atomParser = attempt (relationalAtomParser) <|> unaryAtomParser
-
-        pipe2 namedPrefixParser (FsOmegaLib.LTL.Parser.ltlParser atomParser) (fun x y ->
-            { SymbolicHyperLTL.NamedSymbolicHyperLTL.QuantifierPrefix = x
-              SymbolicHyperLTL.NamedSymbolicHyperLTL.LTLMatrix = y })
-
-    let parseNamedSymbolicHyperltl s =
-        let full = namedSymbolicHyperltlParser .>> spaces .>> eof
-        let res = run full s
-
-        match res with
-        | Success(res, _, _) -> Result.Ok res
-        | Failure(err, _, _) -> Result.Error err
-
-    // ####################################################################
-    // Parsing for Boolean Program HyperLTL properties
-
-    let private relVarParserBit: Parser<(String * int), unit> =
-        pstring "{"
-        >>. pipe3 (spaces >>. many1Chars letter) (pchar '_') (pint32 .>> pstring "}") (fun x _ y -> (x, y))
-
-    let parseBooleanProgramNamedHyperLTL s =
-        let full = namedHyperltlParser relVarParserBit .>> spaces .>> eof
-        let res = run full s
-
-        match res with
-        | Success(res, _, _) -> Result.Ok res
-        | Failure(err, _, _) -> Result.Error err
+*)

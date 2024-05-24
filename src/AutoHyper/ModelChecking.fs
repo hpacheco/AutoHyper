@@ -24,9 +24,14 @@ open FsOmegaLib.Operations
 open TransitionSystemLib.TransitionSystem
 
 open Util
-open RunConfiguration
+open Configuration
+open AtomExpression
+open HyperQPTL
 open HyperLTL
+open AutomataUtil
 
+
+let private swTotal = System.Diagnostics.Stopwatch()
 let private swComplement = System.Diagnostics.Stopwatch()
 let private swProduct = System.Diagnostics.Stopwatch()
 let private swInclusion = System.Diagnostics.Stopwatch()
@@ -34,50 +39,342 @@ let private swEmptiness = System.Diagnostics.Stopwatch()
 let private swLTLtoNBA = System.Diagnostics.Stopwatch()
 
 type TimeSummary =
-    { LTL2NBATime: int
-      ProductTime: int
-      InclusionTime: int
-      ComplementationTime: int
-      EmptinessTime: int
-      TotalTime: int }
+    {
+        LTL2NBATime : int
+        ProductTime : int
+        InclusionTime : int
+        ComplementationTime : int
+        EmptinessTime : int
+        TotalTime : int
+    }
 
-type InclusionChecker =
-    | SPOT
-    | RABIT
-    | BAIT
-    | FORKLIFT
 
-type Mode =
-    | COMP
-    | INCL of InclusionChecker
 
-let private inclusionTest
-    (config: Configuration)
-    (tslist: list<TransitionSystem<'L>>)
-    (aut: NBA<int, 'L * int>)
-    (inclusionChecker: InclusionChecker)
+type PossiblyNegatedAutomaton<'L when 'L : comparison> =
+    {
+        Aut : NBA<int, AtomExpression<'L * TraceVariable>>
+        IsNegated : bool
+    }
+
+module PossiblyNegatedAutomaton =
+    let bringToNegationTargetAndSimplify
+        (config : Configuration)
+        (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
+        (negationTarget : bool)
+        =
+        let sw = System.Diagnostics.Stopwatch()
+        sw.Start()
+
+        // If needed, we complement the NBA (otherwise, we simplify if desired)
+        let nba =
+            if possiblyNegatedAut.IsNegated <> negationTarget then
+                // Complementation is needed
+                config.Logger.LogN $"Start automaton complementation..."
+
+                
+                FsOmegaLib.Operations.AutomataOperations.complementToNBA
+                    config.RaiseExceptions
+                    config.SolverConfig.MainPath
+                    config.SolverConfig.AutfiltPath
+                    (Effort.HIGH)
+                    possiblyNegatedAut.Aut
+                |> AutomataOperationResult.defaultWith (fun err ->  
+                    config.Logger.LogN err.DebugInfo
+                    raise <| AutoHyperException err.Info
+                )
+                
+            else if
+                // No complementation is needed
+                config.ModelCheckingOptions.IntermediateAutomatonSimplification
+            then
+                config.Logger.LogN $"Start automaton simplification..."
+                // Pass into spot (without any changes to the language) to enable easy simplication
+                
+                FsOmegaLib.Operations.AutomatonConversions.convertToNBA
+                    config.RaiseExceptions
+                    config.SolverConfig.AutfiltPath
+                    config.SolverConfig.AutfiltPath
+                    (Effort.HIGH)
+                    possiblyNegatedAut.Aut
+                |> AutomataOperationResult.defaultWith (fun err ->  
+                    config.Logger.LogN err.DebugInfo
+                    raise <| AutoHyperException err.Info
+                )
+            else
+                config.Logger.LogN $"No automaton simplification..."
+                possiblyNegatedAut.Aut
+
+        config.Logger.LogN
+            $"Done. | Automaton Size: %i{nba.Skeleton.States.Count} | Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) |"
+
+        {
+            PossiblyNegatedAutomaton.Aut = nba
+            IsNegated = negationTarget
+        }
+
+
+let rec private generateAutomatonUpToLastBlockRec
+    (config : Configuration)
+    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (quantifierPrefix : list<QuantifierType * TraceVariable>)
+    (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     =
 
-    // Map each index to the APs that are used by aut at that position
-    let automatonAps =
-        aut.APs
-        |> List.groupBy snd
-        |> List.map (fun (i, l) -> i, List.map fst l)
-        |> Map.ofList
+    assert (quantifierPrefix |> List.isEmpty |> not)
+    assert (quantifierPrefix.[0] |> fst = FORALL)
 
-    // Make sure that the automaton only references the position at most |tslist| - 1
-    assert (automatonAps.Keys |> Seq.forall (fun x -> x < tslist.Length))
+    if
+        (match config.ModelCheckingOptions.Mode with
+         | INCL _ -> true
+         | COMP -> false)
+        && (List.forall (fun (q, _) -> q = FORALL) quantifierPrefix)
+    then
+        // Only one block of quantifiers remaining, return the prefix
+        quantifierPrefix |> List.map snd, possiblyNegatedAut
+    else
+        let sw = System.Diagnostics.Stopwatch()
 
-    assert
-        (automatonAps
-         |> Map.toSeq
-         |> Seq.forall (fun (i, aps) -> aps |> List.forall (fun x -> List.contains x tslist.[i].APs)))
+        let lastQuantifierType = quantifierPrefix |> List.last |> fst
 
-    let product =
-        ProductConstruction.constructSelfCompositionAutomaton
-            tslist
-            ([ 0 .. tslist.Length - 1 ]
-             |> List.map (fun x -> if automatonAps.ContainsKey x then automatonAps.[x] else []))
+        let remainingPrefix, eliminationPrefix =
+            if config.ModelCheckingOptions.BlockProduct then
+                let startIndex =
+                    quantifierPrefix
+                    |> List.tryFindIndexBack (fun (q, _) -> q <> lastQuantifierType)
+                    |> Option.map ((+) 1)
+                    |> Option.defaultValue 0
+
+                List.splitAt startIndex quantifierPrefix
+            else
+                List.splitAt (List.length quantifierPrefix - 1) quantifierPrefix
+
+        config.Logger.LogN
+            ("============ " + (QuantifierType.print lastQuantifierType) + " [" + (eliminationPrefix |> List.map snd |> String.concat " ") + " ]. ============")
+
+        config.Logger.LogN $"Automaton Size: {possiblyNegatedAut.Aut.Skeleton.States.Count}"
+
+        let negationTarget =
+            match lastQuantifierType with
+            | EXISTS -> false
+            | FORALL -> true
+
+        let modPossiblyNegatedAut =
+            PossiblyNegatedAutomaton.bringToNegationTargetAndSimplify config possiblyNegatedAut negationTarget
+
+        config.Logger.LogN $"Start automaton-system-product..."
+        sw.Restart()
+
+        let restrictedTsMap =
+            eliminationPrefix |> List.map (fun (_, pi) -> pi, tsMap.[pi]) |> Map.ofList
+
+        let nextAut =
+            ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut restrictedTsMap
+            |> NBA.convertStatesToInt
+
+        config.Logger.LogN
+            $"Done. | Automaton Size: %i{nextAut.Skeleton.States.Count} | Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) |"
+
+        config.Logger.LogN "=================================================="
+        config.Logger.LogN ""
+
+        generateAutomatonUpToLastBlockRec
+            config
+            tsMap
+            remainingPrefix
+            {
+                PossiblyNegatedAutomaton.Aut = nextAut
+                IsNegated = modPossiblyNegatedAut.IsNegated
+            }
+
+
+let generateAutomatonUpToLastBlock
+    (config : Configuration)
+    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (quantifierPrefix : list<QuantifierType * TraceVariable>)
+    (ltlBody : LTL<AtomExpression<'L * TraceVariable>>)
+    =
+    let startWithNegated =
+        if List.isEmpty quantifierPrefix then
+            false
+        else
+            match List.last quantifierPrefix with
+            | FORALL, _ -> true
+            | EXISTS, _ -> false
+
+    let body = if startWithNegated then LTL.Not ltlBody else ltlBody
+
+    config.Logger.LogN "========================= LTL-to-NBA ========================="
+    config.Logger.LogN $"Start LTL-to-NBA translation..."
+    let sw = System.Diagnostics.Stopwatch()
+    sw.Start()
+
+    let aut =
+        FsOmegaLib.Operations.LTLConversion.convertLTLtoNBA
+            config.RaiseExceptions
+            config.SolverConfig.MainPath
+            config.SolverConfig.Ltl2tgbaPath
+            body
+        |> AutomataOperationResult.defaultWith (fun err ->  
+            config.Logger.LogN err.DebugInfo
+            raise <| AutoHyperException err.Info
+        )
+
+    config.Logger.LogN
+        $"Done. | Automaton Size: %i{aut.Skeleton.States.Count} | Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) |"
+
+    config.Logger.LogN "=================================================="
+    config.Logger.LogN ""
+
+    generateAutomatonUpToLastBlockRec
+        config
+        tsMap
+        quantifierPrefix
+        {
+            PossiblyNegatedAutomaton.Aut = aut
+            IsNegated = startWithNegated
+        }
+
+
+let private checkIsEmpty 
+    (config : Configuration) 
+    (nba : NBA<'T, AtomExpression<'L * TraceVariable>>) 
+    =
+
+    let sw : System.Diagnostics.Stopwatch = System.Diagnostics.Stopwatch()
+    sw.Start()
+
+    config.Logger.LogN "========================= Emptiness Check ========================="
+    config.Logger.LogN $"Automaton size: %i{nba.Skeleton.States.Count}"
+    config.Logger.LogN $"Start emptiness check..."
+
+    let isEmpty =
+        FsOmegaLib.Operations.AutomataChecks.isEmpty
+            config.RaiseExceptions
+            config.SolverConfig.MainPath
+            config.SolverConfig.AutfiltPath
+            (nba |> NBA.convertStatesToInt)
+        |> AutomataOperationResult.defaultWith (fun err ->  
+            config.Logger.LogN err.DebugInfo
+            raise <| AutoHyperException err.Info
+        )
+
+    config.Logger.LogN $"Done. | Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) |"
+    config.Logger.LogN "=================================================="
+    config.Logger.LogN ""
+
+    isEmpty
+
+    
+let private findAcceptingPaths 
+    (config : Configuration) 
+    (universalQuantifierPrefix : list<TraceVariable>)
+    (nba : NBA<Map<TraceVariable,int> * int, AtomExpression<'L * TraceVariable>>) 
+    =
+    let sw = System.Diagnostics.Stopwatch()
+
+    config.Logger.LogN "========================= Emptiness Check + Witness ========================="
+    config.Logger.LogN $"Automaton size: %i{nba.Skeleton.States.Count}"
+    config.Logger.LogN  $"Start lasso search..."
+
+    sw.Restart()
+    let res = AutomataUtil.shortestAcceptingPaths nba
+
+    config.Logger.LogN $"Done. | Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double(sw.ElapsedMilliseconds) / 1000.0}s) |"
+    config.Logger.LogN "=================================================="
+    config.Logger.LogN ""
+
+    match res with 
+    | None -> 
+        // Is empty and no witness path
+        None
+    | Some lasso -> 
+        let pathLassoMap = 
+            universalQuantifierPrefix
+            |> List.map (fun pi -> 
+
+                let l = 
+                    { 
+                        Prefix = lasso.Prefix |> List.map (fun (m, _) -> m.[pi])
+                        Loop = lasso.Loop |> List.map (fun (m, _) -> m.[pi])
+                    }
+                
+                pi, l
+                )
+            |> Map.ofList
+
+        Some pathLassoMap
+
+
+type ModelCheckingResult =
+    {
+        IsSat : bool
+        WitnessPaths : option<Map<TraceVariable,Lasso<int>>>
+    }
+
+let private checkInclusionByComplementation
+    (config : Configuration)
+    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (universalQuantifierPrefix : list<TraceVariable>)
+    (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
+    =
+
+    let sw = System.Diagnostics.Stopwatch()
+    sw.Start()
+
+    // Make sure the automaton is negated, as we built the product with the outermost \forall^* block
+    let modPossiblyNegatedAut =
+        PossiblyNegatedAutomaton.bringToNegationTargetAndSimplify config possiblyNegatedAut true
+
+    config.Logger.LogN $"Start automaton-system-product..."
+    sw.Restart()
+
+    let finalAut =
+        ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut tsMap
+
+    config.Logger.LogN
+        $"Done. | Automaton Size: %i{finalAut.Skeleton.States.Count} | Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) |"
+
+    assert (List.isEmpty finalAut.APs)
+
+    if not config.ModelCheckingOptions.ComputeWitnesses then
+        // Just check for emptiness, we use spot for this to be more efficient
+
+        let isEmpty = checkIsEmpty config finalAut
+
+        // The automaton is negated, so the formula holds iff the automaton is not not empty iff the automaton is empty
+        { IsSat = isEmpty; WitnessPaths = None }
+    else
+        // Check for emptiness and search for witness paths
+
+        let acceptingPaths = findAcceptingPaths config universalQuantifierPrefix finalAut
+
+        match acceptingPaths with 
+        | None -> 
+            // Automaton is empty, so the formula holds (as we consider the negated automaton)
+            { IsSat = true; WitnessPaths = None }
+        | Some a -> { IsSat = false; WitnessPaths = Some a }
+
+
+
+let private checkInclusionByInclusion
+    (config : Configuration)
+    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (_ : list<TraceVariable>)
+    (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
+    (inclusionChecker : InclusionChecker)
+    =
+
+    if possiblyNegatedAut.IsNegated then 
+        printfn ">>>>> Warning: Need to complement automaton before inclusion check"
+
+    // Make sure the automaton is NOT negated, so we can check the outermost \forall^* block using inclusion
+    let modPossiblyNegatedAut =
+        PossiblyNegatedAutomaton.bringToNegationTargetAndSimplify config possiblyNegatedAut false
+
+    let nba = modPossiblyNegatedAut.Aut
+
+    let selfComposition =
+        ProductConstruction.constructSelfCompositionAutomaton tsMap nba.APs
         |> NBA.convertStatesToInt
 
     swInclusion.Start()
@@ -85,21 +382,16 @@ let private inclusionTest
     let res =
         match inclusionChecker with
         | SPOT ->
-            if config.SolverConfig.AutfiltPath |> Option.isNone then
-                raise
-                <| AutoHyperException "Required spot's autfilt for inclusion check, but autfilt is not given"
-
             FsOmegaLib.Operations.AutomataChecks.isContained
                 Util.DEBUG
                 config.SolverConfig.MainPath
-                config.SolverConfig.AutfiltPath.Value
-                product
-                aut
+                config.SolverConfig.AutfiltPath
+                selfComposition
+                nba
 
         | RABIT ->
-            let nba1, nba2 = NBA.bringPairToSameAPs product aut
-            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba1
-            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba2
+            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA selfComposition
+            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba
 
             if config.SolverConfig.RabitJarPath |> Option.isNone then
                 raise
@@ -112,9 +404,8 @@ let private inclusionTest
                 enba1
                 enba2
         | BAIT ->
-            let nba1, nba2 = NBA.bringPairToSameAPs product aut
-            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba1
-            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba2
+            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA selfComposition
+            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba
 
             if config.SolverConfig.BaitJarPath |> Option.isNone then
                 raise
@@ -127,9 +418,8 @@ let private inclusionTest
                 enba1
                 enba2
         | FORKLIFT ->
-            let nba1, nba2 = NBA.bringPairToSameAPs product aut
-            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba1
-            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba2
+            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA selfComposition
+            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba
 
             if config.SolverConfig.ForkliftJarPath |> Option.isNone then
                 raise
@@ -143,319 +433,69 @@ let private inclusionTest
                 enba2
 
     swInclusion.Stop()
+    
     res
-
-let rec private modelCheckComplementationRec
-    (config: Configuration)
-    (tslist: list<TransitionSystem<'L>>)
-    (qf: list<int>)
-    (isNegated: bool)
-    (aut: NBA<int, 'L * int>)
-    m
-    =
-    assert (tslist.Length = List.sum qf)
-
-    if qf.Length = 0 then
-        assert (aut.APs.Length = 0)
-
-        swEmptiness.Start()
-
-        let isNotEmpty =
-            if config.SolverConfig.AutfiltPath |> Option.isNone then
-                raise
-                <| AutoHyperException "Required spot's autfilt for emptiness check, but autfilt is not given"
-
-            match
-                FsOmegaLib.Operations.AutomataChecks.isEmpty
-                    Util.DEBUG
-                    config.SolverConfig.MainPath
-                    config.SolverConfig.AutfiltPath.Value
-                    aut
-            with
-            | Success x -> not x
-            | Fail err ->
-                config.LoggerN err.DebugInfo // Log the detailled infos
-                raise <| AutoHyperException err.Info
-
-        swEmptiness.Stop()
-
-        if isNegated then not isNotEmpty else isNotEmpty
-
-    elif
-        qf.Length = 1
-        && (match m with
-            | INCL _ -> true
-            | _ -> false)
-    then
-        let inclusionChecker =
-            match m with
-            | INCL x -> x
-            | _ -> raise <| AutoHyperException "Should not happen"
-
-        config.Logger "Starting Inclusion Check..."
-
-        if isNegated then
-            raise <| AutoHyperException "Automaton is negated but should not be"
-
-        swInclusion.Start()
-
-        let res =
-            match inclusionTest config tslist aut inclusionChecker with
-            | Success x -> x
-            | Fail err ->
-                config.LoggerN err.DebugInfo
-                raise <| AutoHyperException err.Info
-
-        swInclusion.Stop()
-
-        config.LoggerN "Done"
-
-        res
-    else
-        let lastQuantifierType = if qf.Length % 2 = 1 then FORALL else EXISTS
-
-        let needsComplement =
-            (lastQuantifierType = EXISTS && isNegated)
-            || (lastQuantifierType = FORALL && not isNegated)
-
-        let possiblyNegatedAut =
-            if needsComplement then
-                swComplement.Start()
-
-                let r =
-                    if config.SolverConfig.AutfiltPath |> Option.isNone then
-                        raise
-                        <| AutoHyperException
-                            "Required spot's autfilt for NBA complementation, but autfilt is not given"
-
-                    match
-                        FsOmegaLib.Operations.AutomataOperations.complementToNBA
-                            Util.DEBUG
-                            config.SolverConfig.MainPath
-                            config.SolverConfig.AutfiltPath.Value
-                            LOW
-                            aut
-                    with
-                    | Success x -> x
-                    | Fail err ->
-                        config.LoggerN err.DebugInfo
-                        raise <| AutoHyperException err.Info
-
-                swComplement.Stop()
-                r
-            else
-                aut
-
-        let projStartIndex = qf[0 .. qf.Length - 2] |> List.sum
-        let projEndIndex = List.sum qf - 1
-
-        config.Logger "Starting Product Construction..."
-        swProduct.Start()
-
-        let nextAut =
-            ProductConstruction.constructAutomatonSystemProduct
-                possiblyNegatedAut
-                tslist[projStartIndex..projEndIndex]
-                [ projStartIndex..projEndIndex ]
-            |> NBA.convertStatesToInt
-
-        swProduct.Stop()
-
-        config.LoggerN "Done"
-
-        let isNegated = if lastQuantifierType = FORALL then true else false
-
-        modelCheckComplementationRec config tslist[0 .. projStartIndex - 1] qf[0 .. qf.Length - 2] isNegated nextAut m
-
-let private modelCheckInit
-    (config: Configuration)
-    (tslist: list<TransitionSystem<'L>>)
-    (qfPrefix: list<int>)
-    (ltlMatrix: LTL<'L * int>)
-    (m: Mode)
-    =
-    assert (tslist.Length = List.sum qfPrefix)
-
-    assert (qfPrefix.Length >= 2)
-
-    let lastQuantifierType = if qfPrefix.Length % 2 = 1 then FORALL else EXISTS
-
-    let isNegated = if lastQuantifierType = EXISTS then false else true
-
-    config.Logger "Starting LTL2NBA..."
-    swLTLtoNBA.Start()
-
-    let currentNBA =
-        let f =
-            if lastQuantifierType = EXISTS then
-                ltlMatrix
-            else
-                FsOmegaLib.LTL.Not ltlMatrix
-
-        if config.SolverConfig.Ltl2tgbaPath |> Option.isNone then
-            raise
-            <| AutoHyperException "Required spot's ltl2tgba, but ltl2tgba is not given"
-
-        match
-            FsOmegaLib.Operations.LTLConversion.convertLTLtoNBA
-                Util.DEBUG
-                config.SolverConfig.MainPath
-                config.SolverConfig.Ltl2tgbaPath.Value
-                f
-        with
-        | Success aut -> aut
-        | Fail err ->
-            config.LoggerN err.DebugInfo
-            raise <| AutoHyperException err.Info
-
-    swLTLtoNBA.Stop()
-
-    config.LoggerN "Done"
-
-    modelCheckComplementationRec config tslist qfPrefix isNegated currentNBA m
+    |> AutomataOperationResult.defaultWith (fun err ->  
+        config.Logger.LogN err.DebugInfo
+        raise <| AutoHyperException err.Info
+        )
 
 
-let private modelCheckAlternationFree
-    (config: Configuration)
-    (tslist: list<TransitionSystem<'L>>)
-    (prop: HyperLTL<'L>)
-    =
-    config.LoggerN "Verify alternation free formula"
-    assert (extractBlocks prop.QuantifierPrefix |> List.length = 1)
-
-    let shouldNegate = if prop.QuantifierPrefix.[0] = FORALL then true else false
-
-    let matrix =
-        if shouldNegate then
-            LTL.Not prop.LTLMatrix
-        else
-            prop.LTLMatrix
-
-    if config.SolverConfig.Ltl2tgbaPath |> Option.isNone then
-        raise
-        <| AutoHyperException "Required spot's ltl2tgba, but ltl2tgba is not given"
-
-    swLTLtoNBA.Start()
-
-    let nba =
-        match
-            FsOmegaLib.Operations.LTLConversion.convertLTLtoNBA
-                Util.DEBUG
-                config.SolverConfig.MainPath
-                config.SolverConfig.Ltl2tgbaPath.Value
-                matrix
-        with
-        | Success aut -> aut
-        | Fail err ->
-            config.LoggerN err.DebugInfo
-            raise <| AutoHyperException err.Info
-
-    swLTLtoNBA.Stop()
-
-    let isNotEmpty =
-        // Project the automaton on the transition systems
-        swProduct.Start()
-
-        let productAut =
-            ProductConstruction.constructAutomatonSystemProduct nba tslist [ 0 .. tslist.Length - 1 ]
-            |> NBA.convertStatesToInt
-
-        swProduct.Stop()
-
-        // All quantifiers should be eliminated by now
-        assert (productAut.APs.Length = 0)
-
-        // Check emptiness of this automaton
-        swEmptiness.Start()
-
-        if config.SolverConfig.AutfiltPath |> Option.isNone then
-            raise
-            <| AutoHyperException "Required spot's autfilt for emptiness check, but autfilt is not given"
-
-        let isNotEmpty =
-            match
-                FsOmegaLib.Operations.AutomataChecks.isEmpty
-                    Util.DEBUG
-                    config.SolverConfig.MainPath
-                    config.SolverConfig.AutfiltPath.Value
-                    productAut
-            with
-            | Success res -> not res
-            | Fail err ->
-                config.LoggerN err.DebugInfo
-                raise <| AutoHyperException err.Info
-
-        swEmptiness.Stop()
-
-        isNotEmpty
-
-    // If negated we return the opposite result
-    if shouldNegate then not isNotEmpty else isNotEmpty
-
-let modelCheck (config: Configuration) (tslist: list<TransitionSystem<'L>>) (prop: HyperLTL<'L>) m =
-    let sw = System.Diagnostics.Stopwatch()
-    sw.Start()
-
+let modelCheck (config : Configuration) (tsMap : Map<TraceVariable, TransitionSystem<'L>>) (hyperltl : HyperLTL<'L>) =
+    
+    swTotal.Reset()
     swLTLtoNBA.Reset()
     swEmptiness.Reset()
     swInclusion.Reset()
     swProduct.Reset()
     swComplement.Reset()
+    
+    
+    
+    let negateFormula =
+        match List.head hyperltl.QuantifierPrefix with
+        | FORALL, _ -> false
+        | EXISTS, _ -> true
 
-    tslist
-    |> List.iteri (fun i ts ->
-        match TransitionSystem.findError ts with
-        | None -> ()
-        | Some msg -> raise <| AutoHyperException $"Found error in the %i{i}th system: %s{msg}")
-
-    if HyperLTL.isConsistent prop |> not then
-        raise <| AutoHyperException $"The HyperLTL property is not consistent."
-
-    prop.LTLMatrix
-    |> LTL.allAtoms
-    |> Set.toList
-    |> List.iter (fun (x, i) ->
-        if List.length tslist <= i then
-            raise
-            <| AutoHyperException
-                $"AP (%A{x}, %i{i}) is used in the HyperLTL property but only %i{List.length tslist} systems are given."
-
-        if List.contains x tslist.[i].APs |> not then
-            raise
-            <| AutoHyperException
-                $"AP (%A{x}, %i{i}) is used in the HyperLTL property but AP %A{x} does not exists in the %i{i}th transition system.")
-
-    // Convert the prefix to a block prefix
-    let blockPrefix = extractBlocks prop.QuantifierPrefix
-
-    let res =
-        if List.length blockPrefix = 1 then
-            // The formula is alternation-free, use a direct product construction
-            modelCheckAlternationFree config tslist prop
+    let hyperltl =
+        if negateFormula then
+            {
+                HyperLTL.QuantifierPrefix =
+                    hyperltl.QuantifierPrefix |> List.map (fun (q, pi) -> QuantifierType.flip q, pi)
+                LTLMatrix = LTL.Not hyperltl.LTLMatrix
+            }
         else
-            // The formula contains a quantifier alternation.
-            // If the outermost quantifier is \exists, we negate everything so we can always work with a property starting with a \forall quantifier
-            // This way, verification in the outermost alternation can always be reduced to a language inclusion check (if desired)
-            let shouldNegate = if prop.QuantifierPrefix.[0] = EXISTS then true else false
+            hyperltl
 
-            let matrix =
-                if shouldNegate then
-                    LTL.Not prop.LTLMatrix
-                else
-                    prop.LTLMatrix
+    let universalQuantifierPrefix, possiblyNegatedAut =
+        generateAutomatonUpToLastBlock config tsMap hyperltl.QuantifierPrefix hyperltl.LTLMatrix
 
-            let res = modelCheckInit config tslist blockPrefix matrix m
+    let res = 
+        match config.ModelCheckingOptions.Mode with
+        | COMP ->
+            // In case we want to use complementation, we can assume that the final automaton contains no APs
+            assert (List.isEmpty possiblyNegatedAut.Aut.APs)
 
-            if shouldNegate then not res else res
-
-    sw.Stop()
+            checkInclusionByComplementation config tsMap universalQuantifierPrefix possiblyNegatedAut
+        | INCL i ->
+            {
+                // SAT iff the inclusion holds
+                IsSat = checkInclusionByInclusion config tsMap universalQuantifierPrefix possiblyNegatedAut i
+                WitnessPaths = None
+            }
 
     let t =
-        { TotalTime = int (sw.ElapsedMilliseconds)
-          LTL2NBATime = int (swLTLtoNBA.ElapsedMilliseconds)
-          ProductTime = int (swProduct.ElapsedMilliseconds)
-          InclusionTime = int (swInclusion.ElapsedMilliseconds)
-          ComplementationTime = int (swComplement.ElapsedMilliseconds)
-          EmptinessTime = int (swEmptiness.ElapsedMilliseconds) }
+        {
+            TotalTime = int (swTotal.ElapsedMilliseconds)
+            LTL2NBATime = int (swLTLtoNBA.ElapsedMilliseconds)
+            ProductTime = int (swProduct.ElapsedMilliseconds)
+            InclusionTime = int (swInclusion.ElapsedMilliseconds)
+            ComplementationTime = int (swComplement.ElapsedMilliseconds)
+            EmptinessTime = int (swEmptiness.ElapsedMilliseconds)
+        }
 
-    res, t
+    // Restore the negation that is added when converting to \forall^*.... formula
+    {
+        IsSat = if negateFormula then not res.IsSat else res.IsSat
+        WitnessPaths = res.WitnessPaths
+    }, t

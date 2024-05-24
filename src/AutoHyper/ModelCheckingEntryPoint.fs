@@ -25,14 +25,14 @@ open FsOmegaLib.LTL
 open TransitionSystemLib.TransitionSystem
 open TransitionSystemLib.SymbolicSystem
 open TransitionSystemLib.BooleanProgramSystem
-
+(*
 open Util
-open RunConfiguration
+open Configuration
 open HyperLTL
 open HyperLTL.SymbolicHyperLTL
 open ModelChecking
 
-let private verify config (tslist: list<TransitionSystem<String>>) (hyperltl: HyperLTL<String>) (m: Mode) =
+let private verify config (tslist: list<TransitionSystem<string>>) (hyperltl: HyperLTL<string>) (m: Mode) =
     let res, t = ModelChecking.modelCheck config tslist hyperltl m
 
     config.LoggerN ""
@@ -61,7 +61,8 @@ let explictSystemVerification (config: Configuration) systemPaths propPath m =
             try
                 File.ReadAllText x
             with _ ->
-                raise <| AutoHyperException $"Could not open/read file %s{x}")
+                raise <| AutoHyperException $"Could not open/read file %s{x}"
+        )
 
     config.LoggerN $"Read input (%i{sw.ElapsedMilliseconds}ms)"
 
@@ -84,7 +85,8 @@ let explictSystemVerification (config: Configuration) systemPaths propPath m =
             | Result.Ok y -> y
             | Result.Error msg ->
                 raise
-                <| AutoHyperException $"The explicit-state system could not be parsed: %s{msg}")
+                <| AutoHyperException $"The explicit-state system could not be parsed: %s{msg}"
+        )
 
     config.LoggerN $"Parsed input (%i{sw.ElapsedMilliseconds}ms)"
 
@@ -93,7 +95,8 @@ let explictSystemVerification (config: Configuration) systemPaths propPath m =
     |> List.iteri (fun i ts ->
         match TransitionSystem.findError ts with
         | None -> ()
-        | Some msg -> raise <| AutoHyperException $"Found error in the %i{i}th system: %s{msg}")
+        | Some msg -> raise <| AutoHyperException $"Found error in the %i{i}th system: %s{msg}"
+    )
 
     config.LoggerN $"System sizes: %A{tsList |> List.map (fun ts -> ts.States.Count)}"
 
@@ -129,7 +132,8 @@ let explictSystemVerification (config: Configuration) systemPaths propPath m =
         if List.contains x tsList.[i].APs |> not then
             raise
             <| AutoHyperException
-                $"AP (%s{x}, %i{i}) is used in the HyperLTL formula, but AP %s{x} is not defined in the %i{i}th system")
+                $"AP (%s{x}, %i{i}) is used in the HyperLTL formula, but AP %s{x} is not defined in the %i{i}th system"
+    )
 
     verify config tsList hyperltl m
 
@@ -149,7 +153,8 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
             try
                 File.ReadAllText x
             with _ ->
-                raise <| AutoHyperException $"Could not open/read file %s{x}")
+                raise <| AutoHyperException $"Could not open/read file %s{x}"
+        )
 
     config.LoggerN $"Read input (%i{sw.ElapsedMilliseconds}ms)"
 
@@ -162,7 +167,8 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
             | Result.Ok x -> x
             | Result.Error msg ->
                 raise
-                <| AutoHyperException $"The %i{i}th NuSMV system could not be parsed: %s{msg}")
+                <| AutoHyperException $"The %i{i}th NuSMV system could not be parsed: %s{msg}"
+        )
 
     let symbolicHyperLTL =
         match HyperLTL.Parser.parseNamedSymbolicHyperltl propContent with
@@ -176,7 +182,8 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
     |> List.iteri (fun i x ->
         match SymbolicSystem.findError x with
         | None -> ()
-        | Some msg -> raise <| AutoHyperException $"Found error in the %i{i}th system: %s{msg}")
+        | Some msg -> raise <| AutoHyperException $"Found error in the %i{i}th system: %s{msg}"
+    )
 
     let unfoldRelationPredicate (a: RelationalAtom) =
         match a with
@@ -188,7 +195,8 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
                     if plist.Length = 1 then
                         plist.[0].VarTypes |> Map.ofList |> Map.find x
                     else
-                        plist.[n1].VarTypes |> Map.ofList |> Map.find x)
+                        plist.[n1].VarTypes |> Map.ofList |> Map.find x
+                )
 
             let t2 =
                 e2
@@ -196,7 +204,8 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
                     if plist.Length = 1 then
                         plist.[0].VarTypes |> Map.ofList |> Map.find x
                     else
-                        plist.[n2].VarTypes |> Map.ofList |> Map.find x)
+                        plist.[n2].VarTypes |> Map.ofList |> Map.find x
+                )
 
             let t =
                 match TransitionSystemLib.SymbolicSystem.VariableType.joinTypes t1 t2 with
@@ -210,12 +219,14 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
                 LTL.And(
                     LTL.Atom((Expression.Eq(e1, v |> VariableValue.toConstant |> Expression.Const), n1)),
                     LTL.Atom((Expression.Eq(e2, v |> VariableValue.toConstant |> Expression.Const), n2))
-                ))
+                )
+            )
             |> List.reduce (fun x y -> LTL.Or(x, y))
 
-    let unfoldedHyperLTL =
-        { HyperLTL.QuantifierPrefix = symbolicHyperLTL.QuantifierPrefix
-          HyperLTL.LTLMatrix = symbolicHyperLTL.LTLMatrix |> LTL.bind (fun x -> unfoldRelationPredicate x) }
+    let unfoldedHyperLTL = {
+        HyperLTL.QuantifierPrefix = symbolicHyperLTL.QuantifierPrefix
+        HyperLTL.LTLMatrix = symbolicHyperLTL.LTLMatrix |> LTL.bind (fun x -> unfoldRelationPredicate x)
+    }
 
     if HyperLTL.isConsistent unfoldedHyperLTL |> not then
         raise <| AutoHyperException "HyperLTL formula is not consistent"
@@ -238,7 +249,9 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
                     then
                         raise
                         <| AutoHyperException
-                            $"Variable %A{x} is used in an atomic proposition but not defined in the system"))
+                            $"Variable %A{x} is used in an atomic proposition but not defined in the system"
+                )
+            )
 
             let ts = SymbolicSystem.convertSymbolicSystemToTransitionSystem plist.[0] atomList
 
@@ -268,9 +281,12 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
                         then
                             raise
                             <| AutoHyperException
-                                $"Variable %A{x} is used in an atomic proposition but defined in the %i{i}th system"))
+                                $"Variable %A{x} is used in an atomic proposition but defined in the %i{i}th system"
+                    )
+                )
 
-                SymbolicSystem.convertSymbolicSystemToTransitionSystem plist.[i] atomList)
+                SymbolicSystem.convertSymbolicSystemToTransitionSystem plist.[i] atomList
+            )
 
     config.LoggerN $"Compiled programs to explicit-state TSs (%i{sw.ElapsedMilliseconds}ms)"
     config.LoggerN $"System sizes: %A{tsList |> List.map (fun ts -> ts.States.Count)}"
@@ -300,9 +316,10 @@ let nuSMVSystemVerification (config: Configuration) systemPaths propPath m =
         |> List.map (fun ts -> TransitionSystem.mapAPs (fun (x: Expression) -> Expression.print x) ts)
 
 
-    let hyperltl =
-        { HyperLTL.QuantifierPrefix = unfoldedHyperLTL.QuantifierPrefix
-          LTLMatrix = LTL.map (fun (x: Expression, n) -> (Expression.print x, n)) unfoldedHyperLTL.LTLMatrix }
+    let hyperltl = {
+        HyperLTL.QuantifierPrefix = unfoldedHyperLTL.QuantifierPrefix
+        LTLMatrix = LTL.map (fun (x: Expression, n) -> (Expression.print x, n)) unfoldedHyperLTL.LTLMatrix
+    }
 
     verify config tsList hyperltl m
 
@@ -325,7 +342,8 @@ let booleanProgramVerification (config: Configuration) systemPaths propPath m =
             try
                 File.ReadAllText x
             with _ ->
-                raise <| AutoHyperException $"Could not open/read file %s{x}")
+                raise <| AutoHyperException $"Could not open/read file %s{x}"
+        )
 
     config.LoggerN $"Read input (%i{sw.ElapsedMilliseconds}ms)"
 
@@ -348,7 +366,8 @@ let booleanProgramVerification (config: Configuration) systemPaths propPath m =
             | Ok x -> x
             | Error msg ->
                 raise
-                <| AutoHyperException $"The %i{i}th boolean program could not be parsed: %s{msg}")
+                <| AutoHyperException $"The %i{i}th boolean program could not be parsed: %s{msg}"
+        )
 
     config.LoggerN $"Parsed input (%i{sw.ElapsedMilliseconds}ms)"
 
@@ -356,7 +375,8 @@ let booleanProgramVerification (config: Configuration) systemPaths propPath m =
     |> List.iteri (fun i x ->
         match BooleanProgram.findError x with
         | None -> ()
-        | Some msg -> raise <| AutoHyperException $"Found error in the %i{i}th system: %s{msg}")
+        | Some msg -> raise <| AutoHyperException $"Found error in the %i{i}th system: %s{msg}"
+    )
 
     sw.Restart()
 
@@ -373,7 +393,8 @@ let booleanProgramVerification (config: Configuration) systemPaths propPath m =
                 if prog.DomainMap.ContainsKey v && prog.DomainMap.[v] > i |> not then
                     raise
                     <| AutoHyperException
-                        $"AP (%A{v}, %i{i}) is used in the HyperLTL property but variable %A{v} does not exists or has not the required bit width")
+                        $"AP (%A{v}, %i{i}) is used in the HyperLTL property but variable %A{v} does not exists or has not the required bit width"
+            )
 
             let ts =
                 BooleanProgram.convertBooleanProgramToTransitionSystem prog relevantAps
@@ -401,10 +422,12 @@ let booleanProgramVerification (config: Configuration) systemPaths propPath m =
                     if progList.[i].DomainMap.ContainsKey v && progList.[i].DomainMap.[v] > j |> not then
                         raise
                         <| AutoHyperException
-                            $"AP (%A{v}, %i{j}) is used in the HyperLTL property but variable %A{v} does not exists or has not the required bit width. Aborting.")
+                            $"AP (%A{v}, %i{j}) is used in the HyperLTL property but variable %A{v} does not exists or has not the required bit width. Aborting."
+                )
 
                 BooleanProgram.convertBooleanProgramToTransitionSystem progList.[i] relevantAps
-                |> TransitionSystem.mapAPs (fun (n, i) -> n + "_" + string (i)))
+                |> TransitionSystem.mapAPs (fun (n, i) -> n + "_" + string (i))
+            )
 
     config.LoggerN $"Compiled Program to explicit-state TS (%i{sw.ElapsedMilliseconds}ms)"
     config.LoggerN $"System sizes: %A{tsList |> List.map (fun ts -> ts.States.Count)}"
@@ -428,8 +451,10 @@ let booleanProgramVerification (config: Configuration) systemPaths propPath m =
         else
             tsList
 
-    let hyperltl =
-        { HyperLTL.QuantifierPrefix = hyperltl.QuantifierPrefix
-          HyperLTL.LTLMatrix = hyperltl.LTLMatrix |> LTL.map (fun ((n, i), j) -> n + "_" + string (i), j) }
+    let hyperltl = {
+        HyperLTL.QuantifierPrefix = hyperltl.QuantifierPrefix
+        HyperLTL.LTLMatrix = hyperltl.LTLMatrix |> LTL.map (fun ((n, i), j) -> n + "_" + string (i), j)
+    }
 
     verify config tsList hyperltl m
+*)

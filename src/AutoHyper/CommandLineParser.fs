@@ -20,42 +20,107 @@ module CommandLineParser
 open System
 
 open Util
-open RunConfiguration
+open Configuration
 open ModelChecking
 
 open JSON
 
-let VERSION = "1.1"
+let VERSION = "2.0"
 
-type ExecutionMode =
-    | ExplictSystem of list<String> * String
-    | BooleanProgram of list<String> * String
-    | NusmvSystem of list<String> * String
+let private helpMessage =
+    """
+    AutoHyper (Version %s{VERSION})
+    
+    Copyright (C) 2022-2024 Raven Beutner
+    This program comes with ABSOLUTELY NO WARRANTY.
+    This is free software, and you are welcome to redistribute it
+    under certain conditions; use `--license' for details.
+
+    Usage: AutoHyper [system-options] [runtime-options] [analysis-options] [mode-options] <path-to-system> ... <path-to-system> <path-to-property>
+
+    system-options:
+    --nusmv             The systems as explicit state systems as NuSMV systems (default).
+    --exp               The systems as explicit state systems.
+    --bp                The systems as explicit state systems as boolean programs.
+
+    runtime-options:
+    --log               Print additional log statements.
+    --license           Prints license information.
+    --version               Prints the current version of AutoHyper.
+    --help | -h         Show command line help.
+
+    analysis-options:
+    --witness           Attempt to compute witness paths for the outermost quantifier block.
+    --no-bisim          Perform no bisimulation-based minimization of systems.
+    --no-simplification Perform no simplification between product constructions.
+
+    mode-options:
+    --comp              Use complementation for inclusion checking.
+    --incl-spot         Use spot's inclusion check (default).
+    --incl-rabit        Use rabits's inclusion check.
+    --incl-bait         Use bait's inclusion check.
+    --incl-forklift     Use forklift's inclusion check.
+    """
+
+let licenseMessage =
+    """
+    AutoHyper (Version %s{VERSION})
+                
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+    
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+    
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>
+    """
+
+type InputType =
+    | SymbolicSystem
+    | BooleanProgramSystem
+    | ExplicitSystem
 
 type CommandLineArguments =
-    { ExecMode: option<ExecutionMode>
-      Mode: option<ModelChecking.Mode>
-      DebugOutputs: bool
-      ComputeBisimulation: bool }
+    {
+        InputType : InputType
+        InputFiles : option<list<String> * String>
+        Verify : bool
+        WriteExplicitInstance : option<list<String> * String>
+
+        Mode : Mode
+
+        ComputeWitnesses : bool
+        ComputeBisimulation : bool
+        IntermediateAutomatonSimplification : bool
+
+        LogPrintouts : bool // If set to true, we log intermediate steps to the console
+        RaiseExceptions : bool // If set to true, we raise esceptions
+    }
 
     static member Default =
-        { ExecMode = None
-          Mode = Option.None
-          DebugOutputs = false
-          ComputeBisimulation = true }
+        {
+            InputType = SymbolicSystem
+            InputFiles = None
+            Verify = true
+            WriteExplicitInstance = None
 
-let parseConfigFile (s: string) =
-    match JSON.Parser.parseJsonString s with
-    | Result.Error err -> raise <| AutoHyperException $"Could not parse config file: %s{err}"
-    | Result.Ok x ->
-        { MainPath = "./"
-          AutfiltPath = (JSON.tryLookup "autfilt" x) |> Option.bind (fun x -> JSON.tryGetString x)
-          Ltl2tgbaPath = (JSON.tryLookup "ltl2tgba" x) |> Option.bind (fun x -> JSON.tryGetString x)
-          BaitJarPath = (JSON.tryLookup "bait" x) |> Option.bind (fun x -> JSON.tryGetString x)
-          RabitJarPath = (JSON.tryLookup "rabit" x) |> Option.bind (fun x -> JSON.tryGetString x)
-          ForkliftJarPath = (JSON.tryLookup "forklift" x) |> Option.bind (fun x -> JSON.tryGetString x) }
+            Mode = INCL SPOT
 
-let rec private splitByPredicate (f: 'T -> bool) (xs: list<'T>) =
+            ComputeWitnesses = false
+            ComputeBisimulation = true
+            IntermediateAutomatonSimplification = true
+
+            LogPrintouts = false
+            RaiseExceptions = true
+        }
+
+
+let rec private splitByPredicate (f : 'T -> bool) (xs : list<'T>) =
     match xs with
     | [] -> [], []
     | x :: xs ->
@@ -65,45 +130,32 @@ let rec private splitByPredicate (f: 'T -> bool) (xs: list<'T>) =
             let r1, r2 = splitByPredicate f xs
             x :: r1, r2
 
-let parseCommandLineArguments (args: list<String>) =
-    let rec parseArgumentsRec (args: list<String>) (opt: CommandLineArguments) =
-
+let parseCommandLineArguments (args : list<string>) =
+    let rec parseArgumentsRec (args : list<string>) (opt : CommandLineArguments) =
         match args with
         | [] -> Result.Ok opt
         | x :: xs ->
             match x with
-            | "--exp" ->
-                let args, ys = splitByPredicate (fun (x: String) -> x.[0] = '-') xs
-
-                if List.length args < 2 then
-                    Result.Error "Option --exp must be followed by at least two arguments"
-                else
-                    let propertyFile = args[args.Length - 1]
-                    let systemFiles = args[0 .. args.Length - 2]
-
-                    parseArgumentsRec
-                        ys
-                        { opt with
-                            ExecMode = ExplictSystem(systemFiles, propertyFile) |> Some }
-            | "--nusmv" ->
-                let args, ys = splitByPredicate (fun (x: String) -> x.[0] = '-') xs
-
-                if List.length args < 2 then
-                    Result.Error "Option --nusmv must be followed by at least two arguments"
-                else
-                    let propertyFile = args[args.Length - 1]
-                    let systemFiles = args[0 .. args.Length - 2]
-
-                    parseArgumentsRec
-                        ys
-                        { opt with
-                            ExecMode = NusmvSystem(systemFiles, propertyFile) |> Some }
-
+            | "--nusmv" -> parseArgumentsRec xs { opt with InputType = SymbolicSystem }
+            | "--explicit" -> parseArgumentsRec xs { opt with InputType = ExplicitSystem }
             | "--bp" ->
-                let args, ys = splitByPredicate (fun (x: String) -> x.[0] = '-') xs
+                parseArgumentsRec
+                    xs
+                    { opt with
+                        InputType = BooleanProgramSystem
+                    }
+            //
+            | "--incl-rabit" -> parseArgumentsRec xs { opt with Mode = INCL RABIT }
+            | "--incl-bait" -> parseArgumentsRec xs { opt with Mode = INCL BAIT }
+            | "--incl-forklift" -> parseArgumentsRec xs { opt with Mode = INCL FORKLIFT }
+            | "--incl-spot" -> parseArgumentsRec xs { opt with Mode = INCL SPOT }
+            | "--comp" -> parseArgumentsRec xs { opt with Mode = COMP }
+            //
+            | "--write-explicit" ->
+                let args, ys = splitByPredicate (fun (x : String) -> x.[0] = '-') xs
 
                 if List.length args < 2 then
-                    Result.Error "Option --bp must be followed by at least two arguments"
+                    Result.Error "Option --write-explicit must be followed by at least two arguments"
                 else
                     let propertyFile = args[args.Length - 1]
                     let systemFiles = args[0 .. args.Length - 2]
@@ -111,89 +163,49 @@ let parseCommandLineArguments (args: list<String>) =
                     parseArgumentsRec
                         ys
                         { opt with
-                            ExecMode = BooleanProgram(systemFiles, propertyFile) |> Some }
-            | "-m" ->
-                match xs with
-                | [] -> Result.Error "Option -m must be followed by an argument"
-                | y :: ys ->
-                    try
-                        match y with
-                        | "comp" -> parseArgumentsRec ys { opt with Mode = Some COMP }
-                        | "incl_spot" -> parseArgumentsRec ys { opt with Mode = Some(INCL SPOT) }
-                        | "incl_rabit" -> parseArgumentsRec ys { opt with Mode = Some(INCL RABIT) }
-                        | "incl_bait" -> parseArgumentsRec ys { opt with Mode = Some(INCL BAIT) }
-                        | "incl_forklift" -> parseArgumentsRec ys { opt with Mode = Some(INCL FORKLIFT) }
-                        | _ -> Result.Error("Unsupported Mode: " + y)
-                    with _ ->
-                        Result.Error("Unsupported Mode: " + y)
-            | "--debug" -> parseArgumentsRec xs { opt with DebugOutputs = true }
+                            WriteExplicitInstance = Some(systemFiles, propertyFile)
+                        }
+            | "--log" -> parseArgumentsRec xs { opt with LogPrintouts = true }
+            | "--no-verification" -> parseArgumentsRec xs { opt with Verify = false }
+            | "--witness" -> parseArgumentsRec xs { opt with ComputeWitnesses = true }
             | "--no-bisim" -> parseArgumentsRec xs { opt with ComputeBisimulation = false }
-            | "-h"
+            | "--no-simplification" ->
+                parseArgumentsRec
+                    xs
+                    { opt with
+                        IntermediateAutomatonSimplification = false
+                    }
+            //
             | "--help"
-            | "-help" ->
-                printfn $"AutoHyper (Version %s{VERSION})"
-                printfn ""
-                printfn "Copyright (C) 2022-2023 Raven Beutner"
-                printfn "This program comes with ABSOLUTELY NO WARRANTY."
-                printfn "This is free software, and you are welcome to redistribute it"
-                printfn "under certain conditions; use `--license' for details."
-                printfn ""
-                printfn "You have the following options: "
-                printfn ""
-                printfn "  --exp             verify a HyperLTL property on an explicit-state system"
-                printfn "  --nusmv           verify a HyperLTL property on an NuSMV system"
-                printfn "  --bp              verify a HyperLTL property on an boolean program"
-                printfn ""
-
-                printfn
-                    "  All of the above options are used in the form '(-e | -nusmv | -bp) <systemFile(s)> <propFile>'"
-
-                printfn
-                    "  where <systemFile(s)> is a (list of) files to systems and <propFile> the file containing the specification."
-
-                printfn
-                    "  In case only a single systems is given, it will be used for all quantifier. Otherwise the number of systems must match the quantifier prefix in the specification."
-
-                printfn ""
-
-                printfn
-                    "  -m               specifies the mode to be used by AutoHyper. Options are 'comp', 'incl_spot', 'incl_rabit', 'incl_bait', 'incl_forklift'. "
-
-                printfn "                   If left unspecified AutoHyper uses incl_spot. "
-                printfn ""
-                printfn "  --debug          if set, AutoHyper outputs additional infos and more"
-                printfn ""
-                printfn "  --version        prints the current version of AutoHyper."
-                printfn ""
-                printfn "  --license        prints important information about the license used for AutoHyper."
-                printfn ""
-                printfn "  --help | -h      displays this help message."
-
+            | "-h" ->
+                printfn $"{helpMessage}"
                 exit 0
-
             | "--version" ->
                 printfn $"AutoHyper (Version %s{VERSION})"
-
                 exit 0
-
             | "--license" ->
-                printfn $"AutoHyper (Version %s{VERSION})"
-                printfn ""
-                printfn "This program is free software: you can redistribute it and/or modify"
-                printfn "it under the terms of the GNU General Public License as published by"
-                printfn "the Free Software Foundation, either version 3 of the License, or"
-                printfn "(at your option) any later version."
-                printfn ""
-                printfn "This program is distributed in the hope that it will be useful,"
-                printfn "but WITHOUT ANY WARRANTY; without even the implied warranty of"
-                printfn "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the"
-                printfn "GNU General Public License for more details."
-                printfn ""
-                printfn "You should have received a copy of the GNU General Public License"
-                printfn "along with this program.  If not, see <https://www.gnu.org/licenses/>"
-
+                printfn $"{licenseMessage}"
                 exit 0
+            //
+            | s when s <> "" && s.Trim().StartsWith "-" -> Result.Error("Option " + s + " is not supported")
+            | x ->
+                // When no option is given, we assume that this is the input
+                if opt.InputFiles.IsSome then
+                    Result.Error "Input files cannot be given more than once"
+                else
+                    let args, ys = splitByPredicate (fun (y : String) -> y.[0] = '-') (x :: xs)
 
-            | _ -> Result.Error("Option " + x + " is not supported")
+                    if List.length args < 2 then
+                        Result.Error "The input must consist of at least two arguments"
+                    else
+                        let propertyFile = args[args.Length - 1]
+                        let systemFiles = args[0 .. args.Length - 2]
+
+                        parseArgumentsRec
+                            ys
+                            { opt with
+                                InputFiles = (systemFiles, propertyFile) |> Some
+                            }
+
 
     parseArgumentsRec args CommandLineArguments.Default

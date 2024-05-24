@@ -21,7 +21,7 @@ open System
 open System.Collections.Generic
 
 /// If set to true, we raise exceptions
-let DEBUG = false
+let DEBUG = true
 
 exception AutoHyperException of String
 
@@ -57,7 +57,7 @@ let powerset (s: Set<'a>) =
 
     computeFiniteChoices asList
 
-/// Given a map A -> set<B> compute all possible maps A -> B that are obtained by picking some element from that set for each key in A
+/// Given a map 'A -> set<'B> compute all possible maps 'A -> 'B that are obtained by picking some element from that set for each key in 'A
 let cartesianProductMap (m: Map<'A, Set<'B>>) =
     let keysAsList = Seq.toList m.Keys
 
@@ -66,12 +66,6 @@ let cartesianProductMap (m: Map<'A, Set<'B>>) =
     |> List.map (fun x -> m.[x] |> seq)
     |> cartesianProduct
     |> Seq.map (fun x -> List.zip keysAsList x |> Map)
-
-let rec combineStringsWithSeperator (s: String) (l: list<String>) =
-    match l with
-    | [] -> ""
-    | [ x ] -> x
-    | x :: y :: xs -> x + s + combineStringsWithSeperator s (y :: xs)
 
 let dictToMap (d: Dictionary<'A, 'B>) =
     d |> Seq.map (fun x -> x.Key, x.Value) |> Map.ofSeq
@@ -101,10 +95,11 @@ module ParserUtil =
 
 
 module SubprocessUtil =
-    type SubprocessResult =
-        { Stdout: String
-          Stderr: String
-          ExitCode: int }
+    type SubprocessResult = {
+        Stdout: String
+        Stderr: String
+        ExitCode: int
+    }
 
     let executeSubprocess (cmd: string) (arg: string) =
         let psi = System.Diagnostics.ProcessStartInfo(cmd, arg)
@@ -122,6 +117,8 @@ module SubprocessUtil =
         p.BeginOutputReadLine()
         p.WaitForExit()
 
-        { SubprocessResult.Stdout = output.ToString()
-          Stderr = error.ToString()
-          ExitCode = p.ExitCode }
+        {
+            SubprocessResult.Stdout = output.ToString()
+            Stderr = error.ToString()
+            ExitCode = p.ExitCode
+        }
