@@ -1,5 +1,5 @@
 ﻿(*    
-    Copyright (C) 2022-2023 Raven Beutner
+    Copyright (C) 2022-2024 Raven Beutner
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@ open ModelChecking
 open HyperQPTL
 open CommandLineParser
 
+let mutable raiseExceptions = false
 
 let private writeFormulaAndSystemString
     (systemOutputPaths : list<String>)
@@ -85,10 +86,9 @@ let private run (args : array<string>) =
             RaiseExceptions = cmdArgs.RaiseExceptions
         }
 
-    config.Logger.LogN $"========================= Initialization ========================="
+    raiseExceptions <- cmdArgs.RaiseExceptions
 
-    config.Logger.LogN
-        $"Read command line args and solver config. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+    config.Logger.LogN $"========================= Initialization ========================="
 
     let systemInputPaths, formulaInputPath =
         cmdArgs.InputFiles
@@ -97,68 +97,84 @@ let private run (args : array<string>) =
     let tsList, formula =
         match cmdArgs.InputType with
         | SymbolicSystem ->
-            config.Logger.LogN $"Start parsing model-checking instance (--nusmv)..."
+            config.Logger.LogN $"> Parsing model-checking instance (--nusmv)..."
             sw.Restart()
 
             let systemList, formula =
                 InstanceParsing.readAndParseSymbolicInstance systemInputPaths formulaInputPath
 
             config.Logger.LogN
-                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+                $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            config.Logger.LogN $"Start translation to explicit-state system..."
+            config.Logger.LogN $"> Translation to explicit-state system..."
             sw.Restart()
 
             let tsList = Translation.convertSymbolicSystemInstance systemList formula
 
+
             config.Logger.LogN
-                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+                $"...done (time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
             tsList, formula
 
         | BooleanProgramSystem ->
-            config.Logger.LogN $"Start parsing model-checking instance (--bp)..."
+            config.Logger.LogN $"> Parsing model-checking instance (--bp)..."
             sw.Restart()
 
             let programList, formula =
                 InstanceParsing.readAndParseBooleanProgramInstance systemInputPaths formulaInputPath
 
             config.Logger.LogN
-                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+                $"...done (time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            config.Logger.LogN $"Start translation to explicit-state system..."
+            config.Logger.LogN $"> Translation to explicit-state system..."
             sw.Restart()
 
             let tsList, formula = Translation.convertBooleanProgramInstance programList formula
 
             config.Logger.LogN
-                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+                $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
             tsList, formula
 
         | ExplicitSystem ->
-            config.Logger.LogN $"Start parsing model-checking instance (--explicit)..."
+            config.Logger.LogN $"> Parsing model-checking instance (--explicit)..."
             sw.Restart()
 
             let tsList, formula =
                 InstanceParsing.readAndParseExplicitInstance systemInputPaths formulaInputPath
 
+            let tsList =
+                tsList
+                |> List.mapi (fun i ts ->
+                    TransitionSystemLib.TransitionSystem.TransitionSystem.alignWithTypes ts
+                    |> Result.defaultWith (fun err ->
+                        raise
+                        <| AutoHyperException
+                            $"Could not infer variable evaluation in the {i}th transition system: {err}"
+                    )
+                )
+
             config.Logger.LogN
-                $"done. Time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) "
+                $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
             tsList, formula
 
+    config.Logger.LogN
+        ("> system-sizes: [" + (tsList |> List.map (fun ts -> string ts.States.Count) |> String.concat "," ) + "]")
+
     let traceVarList = HyperQPTL.quantifiedTraceVariables formula
 
-    if tsList.Length <> 1 && tsList.Length <> traceVarList.Length then 
-        raise <| AutoHyperException "The number of systems does not match the number of quantified traces"
+    if tsList.Length <> 1 && tsList.Length <> traceVarList.Length then
+        raise
+        <| AutoHyperException "The number of systems does not match the number of quantified traces"
 
     let tsList =
         if config.ModelCheckingOptions.ComputeBisimulation then
             // Compute bisimulation quotient
             sw.Restart()
 
-            config.Logger.LogN $"Start computation of bisimulation quotients..."
+            config.Logger.LogN $"> Computing bisimulation quotients..."
 
             let bisim =
                 tsList
@@ -168,10 +184,10 @@ let private run (args : array<string>) =
                 )
 
             config.Logger.LogN(
-                $"done | Time %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s) | System sizes: ["
-                + (tsList |> List.map (fun ts -> string ts.States.Count) |> String.concat ",")
-                + "]"
-            )
+                $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
+
+            config.Logger.LogN
+                ("> system-sizes: [" + (tsList |> List.map (fun ts -> string ts.States.Count) |> String.concat "," ) + "]")
 
             bisim
         else
@@ -183,7 +199,7 @@ let private run (args : array<string>) =
             traceVarList |> List.map (fun x -> x, tsList.[0]) |> Map.ofList
         else
             (traceVarList, tsList) ||> List.zip |> Map.ofList
-            
+
     match ModelCheckingUtil.findErrorOnModelCheckingInstance tsMap formula with
     | None -> ()
     | Some msg -> raise <| AutoHyperException $"Error in model and/or formula: %s{msg}"
@@ -194,7 +210,8 @@ let private run (args : array<string>) =
     match cmdArgs.WriteExplicitInstance with
     | None -> ()
     | Some(systemOutputPaths, formulaOutputPath) ->
-        config.Logger.LogN $"========================= Writing to file ========================="
+        config.Logger.LogN $"> Writing explicit-state instance to file"
+        sw.Restart()
 
         if systemOutputPaths.Length <> systemInputPaths.Length then
             raise
@@ -208,8 +225,8 @@ let private run (args : array<string>) =
 
         writeFormulaAndSystemString systemOutputPaths formulaOutputPath tsStringList formulaString
 
-        config.Logger.LogN $"=================================================="
-        config.Logger.LogN ""
+        config.Logger.LogN(
+            $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
 
 
     if cmdArgs.Verify then
@@ -217,12 +234,16 @@ let private run (args : array<string>) =
 
         let res, _ = ModelChecking.modelCheck config tsMap formula
 
+        config.Logger.LogN
+            $"> total-time: %i{swTotal.ElapsedMilliseconds} ms (%.4f{double (swTotal.ElapsedMilliseconds) / 1000.0}s)"
+
+        config.Logger.LogN ""
+
         if res.IsSat then printfn "SAT" else printfn "UNSAT"
 
         if cmdArgs.ComputeWitnesses then
             match res.WitnessPaths with
-            | None ->
-                ()
+            | None -> ()
             | Some lassoMap ->
                 // We can assume that each DNF in this lasso is SAT
 
@@ -238,10 +259,6 @@ let private run (args : array<string>) =
                     printfn $"Loop: %s{printList lasso.Loop}"
                 )
 
-
-    config.Logger.LogN
-        $"Total Time: %i{swTotal.ElapsedMilliseconds} ms (%.4f{double (swTotal.ElapsedMilliseconds) / 1000.0} s)"
-
     0
 
 [<EntryPoint>]
@@ -253,15 +270,15 @@ let main args =
         printfn "Error during the analysis:"
         printfn $"{err}"
 
-        if Util.DEBUG then 
-            reraise()
+        if raiseExceptions then
+            reraise ()
 
         exit -1
     | e ->
         printfn "Unexpected Error during the analysis:"
-        printfn $"{e.Message}" 
+        printfn $"{e.Message}"
 
-        if Util.DEBUG then 
-            reraise()
+        if raiseExceptions then
+            reraise ()
 
         exit -1

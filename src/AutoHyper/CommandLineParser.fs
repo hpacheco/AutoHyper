@@ -1,5 +1,5 @@
 (*    
-    Copyright (C) 2022-2023 Raven Beutner
+    Copyright (C) 2022-2024 Raven Beutner
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -113,10 +113,10 @@ type CommandLineArguments =
 
             ComputeWitnesses = false
             ComputeBisimulation = true
-            IntermediateAutomatonSimplification = true
+            IntermediateAutomatonSimplification = false
 
             LogPrintouts = false
-            RaiseExceptions = true
+            RaiseExceptions = false
         }
 
 

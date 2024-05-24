@@ -1,5 +1,5 @@
 (*    
-    Copyright (C) 2022-2023 Raven Beutner
+    Copyright (C) 2022-2024 Raven Beutner
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,11 +20,7 @@ module Util
 open System
 open System.Collections.Generic
 
-/// If set to true, we raise exceptions
-let DEBUG = true
-
 exception AutoHyperException of String
-
 
 /// Given a number n, computes all lists of booleans of length n
 let rec computeBooleanPowerSet n =

@@ -1,5 +1,5 @@
 (*    
-    Copyright (C) 2022-2023 Raven Beutner
+    Copyright (C) 2022-2024 Raven Beutner
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -38,8 +38,8 @@ module QuantifierType =
     let print =
         fun q ->
             match q with
-            | FORALL -> "exists"
-            | EXISTS -> "forall"
+            | FORALL -> "forall"
+            | EXISTS -> "exists"
 
 
 type HyperQPTLQuantifier =
