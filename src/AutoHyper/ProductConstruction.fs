@@ -25,6 +25,7 @@ open FsOmegaLib.SAT
 open FsOmegaLib.AutomatonSkeleton
 open FsOmegaLib.NBA
 
+open Util
 open AtomExpression
 open HyperLTL
 
@@ -61,13 +62,14 @@ let constructAutomatonSystemProduct
         let sucAutStates =
             nba.Edges.[autState]
             |> List.choose (fun (g, succ) ->
-                let usedIndices = DNF.atoms g
+                //let usedIndices = DNF.atoms g
+                let usedIndices = [0..nba.APs.Length - 1] |> set
 
                 let fixedExpressionMap =
                     usedIndices
                     |> Seq.map (fun i ->
                         let e = nba.APs.[i]
-
+                        
                         let fixedExpression =
                             e
                             |> AtomExpression.bind (fun (var, pi) ->
@@ -82,11 +84,10 @@ let constructAutomatonSystemProduct
                                         BoolConstant b
                             )
                             |> AtomExpression.simplify
-
+                        
                         i, fixedExpression
                     )
                     |> Map.ofSeq
-
 
                 // All AP expression that reduce to a boolean constant, will be fixed
                 let fixingMap =
@@ -135,7 +136,7 @@ let constructAutomatonSystemProduct
                 (g, (stateMap', autState'))
             )
             |> Seq.toList
-
+        
         newEdges.Add(n, sucs)
 
     {
@@ -158,15 +159,6 @@ let constructSelfCompositionAutomaton
     (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
     (expressionList : list<AtomExpression<'L * TraceVariable>>)
     =
-
-    // Assert that all interesting aps are also aps in the transition system
-    assert
-        (expressionList
-         |> List.forall (fun e ->
-             e
-             |> AtomExpression.allVars
-             |> Set.forall (fun (_, pi) -> Map.containsKey pi tsMap)
-         ))
 
     let allInitStateMaps =
         tsMap |> Map.map (fun _ ts -> ts.InitialStates) |> Util.cartesianProductMap
@@ -192,13 +184,11 @@ let constructSelfCompositionAutomaton
                     |> AtomExpression.simplify
 
                 match fe with
-                | BoolConstant true -> Literal.PL i |> Some
-                | BoolConstant false -> Literal.NL i |> Some
+                | BoolConstant true -> Literal.PL i
+                | BoolConstant false -> Literal.NL i
                 | _ ->
-                    // Can be both true and false, do not include constraints
-                    None
+                    raise <| AutoHyperException "Expression does not evaluate to boolean"
             )
-            |> List.choose id
             |> List.singleton
 
         let allSuccessorStates =

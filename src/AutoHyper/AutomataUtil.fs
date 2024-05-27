@@ -22,6 +22,8 @@ open System.Collections.Generic
 open FsOmegaLib.SAT
 open FsOmegaLib.NBA
 
+open Util
+
 module private GraphUtil =
 
     let shortestPathsBetweenAllPairs
@@ -67,7 +69,7 @@ type Lasso<'L> = { Prefix : list<'L>; Loop : list<'L> }
 module Lasso =
     let length (lasso : Lasso<'L>) = lasso.Prefix.Length + lasso.Loop.Length
 
-let internal shortestAcceptingPaths (nba : NBA<'T, 'L>) =
+let shortestAcceptingPaths (nba : NBA<'T, 'L>) =
     let satEdges =
         nba.Edges |> Map.map (fun _ l -> l |> List.filter (fun (g, _) -> DNF.isSat g))
 
@@ -88,3 +90,5 @@ let internal shortestAcceptingPaths (nba : NBA<'T, 'L>) =
         None
     else
         a |> Seq.minBy Lasso.length |> Some
+
+

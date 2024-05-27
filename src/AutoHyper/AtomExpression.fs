@@ -45,18 +45,17 @@ module AtomVariableValue =
 type AtomOperator =
     | AND
     | OR
-    | IMPLIES
-    | EQUIV
     | NOT
+    //
     | EQ
     | LT
     | GT
     | LE
     | GE
+    //
     | ADD
     | SUB
     | MUL
-
     | MINUS
 
 module AtomOperator =
@@ -64,8 +63,6 @@ module AtomOperator =
         match opp with
         | AND -> "&"
         | OR -> "|"
-        | IMPLIES -> "->"
-        | EQUIV -> "<->"
         | NOT -> "!"
         | EQ -> "="
         | LT -> "<"
@@ -77,47 +74,42 @@ module AtomOperator =
         | MUL -> "*"
         | MINUS -> "-"
 
-    let inferType (opp) (tl : list<AtomVariableType>) = 
-        match opp with 
-        | AND | OR -> 
-            if List.forall ((=) Bool) tl then 
+    let inferType (opp) (tl : list<AtomVariableType>) =
+        match opp with
+        | AND
+        | OR -> if List.forall ((=) Bool) tl then Some Bool else None
+        | NOT ->
+            if List.forall ((=) Bool) tl && List.length tl = 1 then
                 Some Bool
-            else 
+            else
                 None
-        | IMPLIES | EQUIV -> 
-            if List.forall ((=) Bool) tl && List.length tl = 2 then 
+        | EQ ->
+            if
+                ((List.forall ((=) Int) tl) || (List.forall ((=) Bool) tl))
+                && List.length tl = 2
+            then
                 Some Bool
-            else 
+            else
                 None
-        | NOT -> 
-            if List.forall ((=) Bool) tl && List.length tl = 1 then 
+        | LT
+        | GT
+        | LE
+        | GE ->
+            if (List.forall ((=) Int) tl) && List.length tl = 2 then
                 Some Bool
-            else 
+            else
                 None
-        | EQ -> 
-            if ((List.forall ((=) Int) tl) || (List.forall ((=) Bool) tl)) && List.length tl = 2 then 
-                Some Bool
-            else 
-                None
-         | LT | GT | LE | GE -> 
-            if (List.forall ((=) Int) tl) && List.length tl = 2 then 
-                Some Bool
-            else 
-                None
-        | ADD | MUL -> 
-            if List.forall ((=) Int) tl then 
+        | ADD
+        | MUL -> if List.forall ((=) Int) tl then Some Int else None
+        | SUB ->
+            if List.forall ((=) Int) tl && List.length tl = 2 then
                 Some Int
-            else 
+            else
                 None
-        | SUB  -> 
-            if List.forall ((=) Int) tl && List.length tl = 2  then 
+        | MINUS ->
+            if List.forall ((=) Int) tl && List.length tl = 1 then
                 Some Int
-            else 
-                None
-        | MINUS  -> 
-            if List.forall ((=) Int) tl && List.length tl = 1  then 
-                Some Int
-            else 
+            else
                 None
 
 
@@ -137,6 +129,12 @@ module AtomExpression =
         | IntConstant _ -> Set.empty
         | App(_, l) -> l |> List.map allVars |> Set.unionMany
 
+    let isConstant e =
+        match e with
+        | IntConstant _
+        | BoolConstant _ -> true
+        | _ -> false
+
     let rec map (m : 'T -> 'a) (e : AtomExpression<'T>) =
         match e with
         | Variable s -> Variable(m s)
@@ -151,20 +149,153 @@ module AtomExpression =
         | BoolConstant c -> BoolConstant c
         | App(n, l) -> App(n, List.map (bind m) l)
 
-    let simplify e = e
+    // Requirement: A variable free expression always reduces to a Constant
+    let rec simplify e =
+        match e with
+        | Variable s -> Variable s
+        | IntConstant c -> IntConstant c
+        | BoolConstant c -> BoolConstant c
+        | App(AND, el) ->
+            let args =
+                el
+                |> List.map simplify
+                |> List.map (fun x ->
+                    match x with
+                    | App(AND, l) -> l
+                    | _ -> [ x ]
+                )
+                |> List.concat
+                // Remove all 'true's
+                |> List.filter ((<>) (BoolConstant true))
 
-    let rec inferType (env : 'T -> AtomVariableType) (e : AtomExpression<'T>) = 
+            if List.contains (BoolConstant false) args then
+                BoolConstant false
+            else
+                match args with
+                | [] -> BoolConstant true
+                | [ x ] -> x
+                | xs -> App(AND, xs)
+        | App(OR, el) ->
+            let args =
+                el
+                |> List.map simplify
+                |> List.map (fun x ->
+                    match x with
+                    | App(OR, l) -> l
+                    | _ -> [ x ]
+                )
+                |> List.concat
+                // Remove all 'false's
+                |> List.filter ((<>) (BoolConstant false))
+
+            if List.contains (BoolConstant true) args then
+                BoolConstant true
+            else
+                match args with
+                | [] -> BoolConstant false
+                | [ x ] -> x
+                | xs -> App(OR, xs)
+        | App(NOT, [ e1 ]) ->
+            match simplify e1 with
+            | BoolConstant b -> BoolConstant(not b)
+            | App(NOT, [ e ]) -> e
+            | e1 -> App(NOT, [ e1 ])
+
+        | App(EQ, [ e1; e2 ]) ->
+            match simplify e1, simplify e2 with
+            | e1, e2 when e1 = e2 -> BoolConstant true
+            | e1, e2 when isConstant e1 && isConstant e2 && e1 <> e2 -> BoolConstant false
+            | e1, e2 -> App(EQ, [ e1; e2 ])
+        | App(LT, [ e1; e2 ]) ->
+            match simplify e1, simplify e2 with
+            | IntConstant i1, IntConstant i2 -> BoolConstant (i1 < i2)
+            | e1, e2 -> App(LT, [ e1; e2 ])
+        | App(GT, [ e1; e2 ]) ->
+            match simplify e1, simplify e2 with
+            | IntConstant i1, IntConstant i2 -> BoolConstant (i1 > i2)
+            | e1, e2 -> App(GT, [ e1; e2 ])
+        | App(LE, [ e1; e2 ]) ->
+            match simplify e1, simplify e2 with
+            | IntConstant i1, IntConstant i2 -> BoolConstant (i1 <= i2)
+            | e1, e2 -> App(LE, [ e1; e2 ])
+        | App(GE, [ e1; e2 ]) ->
+            match simplify e1, simplify e2 with
+            | IntConstant i1, IntConstant i2 -> BoolConstant (i1 >= i2)
+            | e1, e2 -> App(GE, [ e1; e2 ])
+        | App(ADD, el) ->
+            let args =
+                el
+                |> List.map simplify
+                |> List.map (fun x ->
+                    match x with
+                    | App(ADD, l) -> l
+                    | _ -> [ x ]
+                )
+                |> List.concat
+
+            let sum, l = 
+                (args, (0, []))
+                ||> List.foldBack (fun x (sum, l) -> 
+                    match x with 
+                    | IntConstant i -> (sum + i, l)
+                    | _ -> (sum, x :: l)
+                    )
+
+            match l with 
+            | [] -> IntConstant sum
+            | xs -> App(ADD, (IntConstant sum) :: xs)
+
+        | App(SUB, [ e1; e2 ]) ->
+            match simplify e1, simplify e2 with
+            | IntConstant i1, IntConstant i2 -> IntConstant (i1 - i2)
+            | e1, e2 -> App(GT, [ e1; e2 ])
+        
+        | App(MUL, el) ->
+            let args =
+                el
+                |> List.map simplify
+                |> List.map (fun x ->
+                    match x with
+                    | App(MUL, l) -> l
+                    | _ -> [ x ]
+                )
+                |> List.concat
+
+            let sum, l = 
+                (args, (1, []))
+                ||> List.foldBack (fun x (sum, l) -> 
+                    match x with 
+                    | IntConstant i -> (sum * i, l)
+                    | _ -> (sum, x :: l)
+                    )
+
+            match sum, l with 
+            | c, [] -> IntConstant c 
+            | 0, _ -> IntConstant 0 
+            | 1, xs -> App(MUL, xs)
+            | c, xs -> App(MUL, (IntConstant c) :: xs)
+
+        | App(MINUS, [ e1 ]) ->
+            match simplify e1 with
+            | IntConstant i -> IntConstant (-i)
+            | App(MINUS, [ e ]) -> e
+            | e1 -> App(MINUS, [ e1 ])
+        | App (opp, el) -> 
+            App(opp, List.map simplify el)
+
+    let rec inferType (env : 'T -> AtomVariableType) (e : AtomExpression<'T>) =
         match e with
         | Variable s -> Some(env s)
         | IntConstant _ -> Some Int
         | BoolConstant _ -> Some Bool
-        | App(opp, l) -> 
+        | App(opp, l) ->
             let tl = l |> List.map (inferType env)
-            if List.exists Option.isNone tl then 
-                None 
-            else 
+
+            if List.exists Option.isNone tl then
+                None
+            else
                 AtomOperator.inferType opp (List.map Option.get tl)
-            
+
 
     let rec print (varStringer : 'T -> string) (e : AtomExpression<'T>) =
         match e with
@@ -303,18 +434,17 @@ module Parser =
         addInfixOperator "-" 80 Associativity.Left (fun e1 e2 -> App(SUB, [ e1; e2 ]))
         addPrefixOperator "-" 100 true (fun x -> App(MINUS, [ x ]))
 
-        addInfixOperator "==" 70 Associativity.Left (fun e1 e2 -> App(EQ, [ e1; e2 ]))
+        addInfixOperator "=" 70 Associativity.Left (fun e1 e2 -> App(EQ, [ e1; e2 ]))
         addInfixOperator "!=" 70 Associativity.Left (fun e1 e2 -> App(NOT, [ App(EQ, [ e1; e2 ]) ]))
         addInfixOperator "<=" 70 Associativity.Left (fun e1 e2 -> App(LE, [ e1; e2 ]))
         addInfixOperator ">=" 70 Associativity.Left (fun e1 e2 -> App(GE, [ e1; e2 ]))
         addInfixOperator "<" 70 Associativity.Left (fun e1 e2 -> App(LT, [ e1; e2 ]))
         addInfixOperator ">" 70 Associativity.Left (fun e1 e2 -> App(GT, [ e1; e2 ]))
 
-        addInfixOperator "&&" 50 Associativity.Left (fun e1 e2 -> App(AND, [ e1; e2 ]))
+        addInfixOperator "&" 50 Associativity.Left (fun e1 e2 -> App(AND, [ e1; e2 ]))
 
-        addInfixOperator "||" 40 Associativity.Left (fun e1 e2 -> App(OR, [ e1; e2 ]))
+        addInfixOperator "|" 40 Associativity.Left (fun e1 e2 -> App(OR, [ e1; e2 ]))
         addPrefixOperator "!" 60 true (fun x -> App(NOT, [ x ]))
-        addInfixOperator "=>" 30 Associativity.Left (fun e1 e2 -> App(IMPLIES, [ e1; e2 ]))
 
 
         let basicParser =

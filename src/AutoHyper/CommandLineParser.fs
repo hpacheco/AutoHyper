@@ -149,6 +149,7 @@ let parseCommandLineArguments (args : list<string>) =
             | "--incl-bait" -> parseArgumentsRec xs { opt with Mode = INCL BAIT }
             | "--incl-forklift" -> parseArgumentsRec xs { opt with Mode = INCL FORKLIFT }
             | "--incl-spot" -> parseArgumentsRec xs { opt with Mode = INCL SPOT }
+            | "--incl-forq" -> parseArgumentsRec xs { opt with Mode = INCL SPOT_FORQ }
             | "--comp" -> parseArgumentsRec xs { opt with Mode = COMP }
             //
             | "--write-explicit" ->

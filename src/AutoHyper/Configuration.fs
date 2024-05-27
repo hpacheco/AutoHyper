@@ -38,6 +38,7 @@ type InclusionChecker =
     | RABIT
     | BAIT
     | FORKLIFT
+    | SPOT_FORQ
 
 type Mode =
     | COMP

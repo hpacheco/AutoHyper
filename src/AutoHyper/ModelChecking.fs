@@ -32,7 +32,7 @@ open AutomataUtil
 
 
 
-let private sw = System.Diagnostics.Stopwatch()   
+let private sw = System.Diagnostics.Stopwatch()
 let private swTotal = System.Diagnostics.Stopwatch()
 let private swComplement = System.Diagnostics.Stopwatch()
 let private swProduct = System.Diagnostics.Stopwatch()
@@ -71,14 +71,15 @@ module PossiblyNegatedAutomaton =
                 // Complementation is needed
                 config.Logger.LogN $"> Automaton complementation..."
                 sw.Restart()
-                let res = 
+
+                let res =
                     FsOmegaLib.Operations.AutomataOperations.complementToNBA
                         config.RaiseExceptions
                         config.SolverConfig.MainPath
                         config.SolverConfig.AutfiltPath
                         (Effort.HIGH)
                         possiblyNegatedAut.Aut
-                    |> AutomataOperationResult.defaultWith (fun err ->  
+                    |> AutomataOperationResult.defaultWith (fun err ->
                         config.Logger.LogN err.DebugInfo
                         raise <| AutoHyperException err.Info
                     )
@@ -86,14 +87,12 @@ module PossiblyNegatedAutomaton =
                 config.Logger.LogN
                     $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-                config.Logger.LogN
-                    $"> size-before: %i{possiblyNegatedAut.Aut.Skeleton.States.Count}"
+                config.Logger.LogN $"> size-before: %i{possiblyNegatedAut.Aut.Skeleton.States.Count}"
 
-                config.Logger.LogN
-                    $"> size-after: %i{res.Skeleton.States.Count}"
+                config.Logger.LogN $"> size-after: %i{res.Skeleton.States.Count}"
 
                 res
-                
+
             else if
                 // No complementation is needed
                 config.ModelCheckingOptions.IntermediateAutomatonSimplification
@@ -101,14 +100,15 @@ module PossiblyNegatedAutomaton =
                 // Pass into spot (without any changes to the language) to enable easy simplification
                 config.Logger.LogN $"> Automaton simplification..."
                 sw.Restart()
-                let res = 
+
+                let res =
                     FsOmegaLib.Operations.AutomatonConversions.convertToNBA
                         config.RaiseExceptions
                         config.SolverConfig.MainPath
                         config.SolverConfig.AutfiltPath
                         (Effort.HIGH)
                         possiblyNegatedAut.Aut
-                    |> AutomataOperationResult.defaultWith (fun err ->  
+                    |> AutomataOperationResult.defaultWith (fun err ->
                         config.Logger.LogN err.DebugInfo
                         raise <| AutoHyperException err.Info
                     )
@@ -116,15 +116,14 @@ module PossiblyNegatedAutomaton =
                 config.Logger.LogN
                     $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-                config.Logger.LogN
-                    $"> size-before: %i{possiblyNegatedAut.Aut.Skeleton.States.Count}"
+                config.Logger.LogN $"> size-before: %i{possiblyNegatedAut.Aut.Skeleton.States.Count}"
 
-                config.Logger.LogN
-                    $"> size-after: %i{res.Skeleton.States.Count}"
+                config.Logger.LogN $"> size-after: %i{res.Skeleton.States.Count}"
 
                 res
             else
                 possiblyNegatedAut.Aut
+
         {
             PossiblyNegatedAutomaton.Aut = nba
             IsNegated = isNegatedTarget
@@ -159,8 +158,13 @@ let rec private generateAutomatonUpToLastBlockRec
             else
                 List.splitAt (List.length quantifierPrefix - 1) quantifierPrefix
 
-        config.Logger.LogN
-            ("============ " + (QuantifierType.print lastQuantifierType) + " [" + (eliminationPrefix |> List.map snd |> String.concat " ") + " ]. ============")
+        config.Logger.LogN(
+            "============ "
+            + (QuantifierType.print lastQuantifierType)
+            + " ["
+            + (eliminationPrefix |> List.map snd |> String.concat " ")
+            + " ]. ============"
+        )
 
         config.Logger.LogN $"> size: {possiblyNegatedAut.Aut.Skeleton.States.Count}"
 
@@ -182,8 +186,7 @@ let rec private generateAutomatonUpToLastBlockRec
             ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut restrictedTsMap
             |> NBA.convertStatesToInt
 
-        config.Logger.LogN
-            $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+        config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
 
         config.Logger.LogN $"> size: {nextAut.Skeleton.States.Count}"
@@ -220,7 +223,7 @@ let generateAutomatonUpToLastBlock
 
     config.Logger.LogN "========================= LTL-to-NBA ========================="
     config.Logger.LogN $"> Start LTL-to-NBA translation..."
-    
+
     sw.Restart()
 
     let aut =
@@ -229,13 +232,12 @@ let generateAutomatonUpToLastBlock
             config.SolverConfig.MainPath
             config.SolverConfig.Ltl2tgbaPath
             body
-        |> AutomataOperationResult.defaultWith (fun err ->  
+        |> AutomataOperationResult.defaultWith (fun err ->
             config.Logger.LogN err.DebugInfo
             raise <| AutoHyperException err.Info
         )
 
-    config.Logger.LogN
-        $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+    config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
     config.Logger.LogN $"> size: {aut.Skeleton.States.Count}"
 
@@ -253,10 +255,7 @@ let generateAutomatonUpToLastBlock
         }
 
 
-let private checkIsEmpty 
-    (config : Configuration) 
-    (nba : NBA<'T, AtomExpression<'L * TraceVariable>>) 
-    =
+let private checkIsEmpty (config : Configuration) (nba : NBA<'T, AtomExpression<'L * TraceVariable>>) =
 
     let sw : System.Diagnostics.Stopwatch = System.Diagnostics.Stopwatch()
     sw.Start()
@@ -271,7 +270,7 @@ let private checkIsEmpty
             config.SolverConfig.MainPath
             config.SolverConfig.AutfiltPath
             (nba |> NBA.convertStatesToInt)
-        |> AutomataOperationResult.defaultWith (fun err ->  
+        |> AutomataOperationResult.defaultWith (fun err ->
             config.Logger.LogN err.DebugInfo
             raise <| AutoHyperException err.Info
         )
@@ -282,11 +281,11 @@ let private checkIsEmpty
 
     isEmpty
 
-    
-let private findAcceptingPaths 
-    (config : Configuration) 
+
+let private findAcceptingPaths
+    (config : Configuration)
     (universalQuantifierPrefix : list<TraceVariable>)
-    (nba : NBA<Map<TraceVariable,int> * int, AtomExpression<'L * TraceVariable>>) 
+    (nba : NBA<Map<TraceVariable, int> * int, AtomExpression<'L * TraceVariable>>)
     =
 
     config.Logger.LogN "========================= Emptiness Check + Witness ========================="
@@ -296,27 +295,27 @@ let private findAcceptingPaths
     sw.Restart()
     let res = AutomataUtil.shortestAcceptingPaths nba
 
-    config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double(sw.ElapsedMilliseconds) / 1000.0}s)"
+    config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
     config.Logger.LogN "=================================================="
     config.Logger.LogN ""
 
-    match res with 
-    | None -> 
+    match res with
+    | None ->
         // Is empty and no witness path
         None
-    | Some lasso -> 
-        let pathLassoMap = 
+    | Some lasso ->
+        let pathLassoMap =
             universalQuantifierPrefix
-            |> List.map (fun pi -> 
+            |> List.map (fun pi ->
 
-                let l = 
-                    { 
+                let l =
+                    {
                         Prefix = lasso.Prefix |> List.map (fun (m, _) -> m.[pi])
                         Loop = lasso.Loop |> List.map (fun (m, _) -> m.[pi])
                     }
-                
+
                 pi, l
-                )
+            )
             |> Map.ofList
 
         Some pathLassoMap
@@ -325,7 +324,7 @@ let private findAcceptingPaths
 type ModelCheckingResult =
     {
         IsSat : bool
-        WitnessPaths : option<Map<TraceVariable,Lasso<int>>>
+        WitnessPaths : option<Map<TraceVariable, Lasso<int>>>
     }
 
 let private checkInclusionByEmptiness
@@ -344,11 +343,13 @@ let private checkInclusionByEmptiness
     config.Logger.LogN $"> Start automaton-system-product..."
     sw.Restart()
 
-    let finalAut =
-        ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut tsMap
+    let restrictedTsMap =
+        universalQuantifierPrefix |> List.map (fun pi -> pi, tsMap.[pi]) |> Map.ofList
 
-    config.Logger.LogN
-        $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+    let finalAut =
+        ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut restrictedTsMap
+
+    config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
     config.Logger.LogN $"> size: {finalAut.Skeleton.States.Count}"
     config.Logger.LogN "=================================================="
@@ -356,7 +357,7 @@ let private checkInclusionByEmptiness
 
     assert (List.isEmpty finalAut.APs)
 
-    let res = 
+    let res =
         if not config.ModelCheckingOptions.ComputeWitnesses then
             // Just check for emptiness, we use spot for this to be more efficient
 
@@ -369,8 +370,8 @@ let private checkInclusionByEmptiness
 
             let acceptingPaths = findAcceptingPaths config universalQuantifierPrefix finalAut
 
-            match acceptingPaths with 
-            | None -> 
+            match acceptingPaths with
+            | None ->
                 // Automaton is empty, so the formula holds (as we consider the negated automaton)
                 { IsSat = true; WitnessPaths = None }
             | Some a -> { IsSat = false; WitnessPaths = Some a }
@@ -382,14 +383,14 @@ let private checkInclusionByEmptiness
 let private checkInclusionByInclusion
     (config : Configuration)
     (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
-    (_ : list<TraceVariable>)
+    (universalQuantifierPrefix : list<TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     (inclusionChecker : InclusionChecker)
     =
 
     config.Logger.LogN "========================= Inclusion Check ========================="
 
-    if possiblyNegatedAut.IsNegated then 
+    if possiblyNegatedAut.IsNegated then
         printfn "! WARNING: Need to complement automaton before inclusion check"
 
     // Make sure the automaton is NOT negated, so we can check the outermost \forall^* block using inclusion
@@ -398,13 +399,22 @@ let private checkInclusionByInclusion
 
     let nba = modPossiblyNegatedAut.Aut
 
-    let selfComposition =
-        ProductConstruction.constructSelfCompositionAutomaton tsMap nba.APs
-        |> NBA.convertStatesToInt
-
-    config.Logger.LogN $"> self-composition-size: {selfComposition.States.Count}"
     config.Logger.LogN $"> size: {nba.States.Count}"
 
+    config.Logger.LogN $"> Construct self-composition..."
+    sw.Restart()
+
+    let restrictedTsMap =
+        universalQuantifierPrefix |> List.map (fun pi -> pi, tsMap.[pi]) |> Map.ofList
+
+    let selfComposition =
+        ProductConstruction.constructSelfCompositionAutomaton restrictedTsMap nba.APs
+        |> NBA.convertStatesToInt
+
+    config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+
+    config.Logger.LogN $"> self-composition-size: {selfComposition.States.Count}"
+    
     config.Logger.LogN $"> Start inclusion check..."
 
     swInclusion.Start()
@@ -415,6 +425,14 @@ let private checkInclusionByInclusion
         match inclusionChecker with
         | SPOT ->
             FsOmegaLib.Operations.AutomataChecks.isContained
+                config.RaiseExceptions
+                config.SolverConfig.MainPath
+                config.SolverConfig.AutfiltPath
+                selfComposition
+                nba
+
+        | SPOT_FORQ ->
+            ExplicitAutomaton.isContainedForklift
                 config.RaiseExceptions
                 config.SolverConfig.MainPath
                 config.SolverConfig.AutfiltPath
@@ -466,28 +484,27 @@ let private checkInclusionByInclusion
 
     swInclusion.Stop()
 
-    config.Logger.LogN
-        $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+    config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
     config.Logger.LogN "=================================================="
     config.Logger.LogN ""
-    
+
     res
-    |> AutomataOperationResult.defaultWith (fun err ->  
+    |> AutomataOperationResult.defaultWith (fun err ->
         config.Logger.LogN err.DebugInfo
         raise <| AutoHyperException err.Info
-        )
+    )
 
 
 let modelCheck (config : Configuration) (tsMap : Map<TraceVariable, TransitionSystem<'L>>) (hyperltl : HyperLTL<'L>) =
-    
+
     swTotal.Reset()
     swLTLtoNBA.Reset()
     swEmptiness.Reset()
     swInclusion.Reset()
     swProduct.Reset()
     swComplement.Reset()
-    
-    
+
+
     let negateFormula =
         match List.head hyperltl.QuantifierPrefix with
         | FORALL, _ -> false
@@ -507,11 +524,14 @@ let modelCheck (config : Configuration) (tsMap : Map<TraceVariable, TransitionSy
         generateAutomatonUpToLastBlock config tsMap hyperltl.QuantifierPrefix hyperltl.LTLMatrix
 
     let res = 
-        match config.ModelCheckingOptions.Mode with
-        | COMP ->
-            // In case we want to use complementation, we can assume that the final automaton contains no APs
+        match config.ModelCheckingOptions.Mode, possiblyNegatedAut.IsNegated with
+        | COMP, _ | _, true ->
+            // The inclusion should be checked by complementation
+            // OR The automaton is already negated, which implies that the formula is alternation-free
+            // In this case, checking the formula by inclusion would require an additional complementation, and checking by taking the product is much cheaper
+            
             checkInclusionByEmptiness config tsMap universalQuantifierPrefix possiblyNegatedAut
-        | INCL i ->
+        | INCL i, false ->
             {
                 // SAT iff the inclusion holds
                 IsSat = checkInclusionByInclusion config tsMap universalQuantifierPrefix possiblyNegatedAut i
@@ -532,4 +552,5 @@ let modelCheck (config : Configuration) (tsMap : Map<TraceVariable, TransitionSy
     {
         IsSat = if negateFormula then not res.IsSat else res.IsSat
         WitnessPaths = res.WitnessPaths
-    }, t
+    },
+    t

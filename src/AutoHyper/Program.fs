@@ -113,7 +113,7 @@ let private run (args : array<string>) =
 
 
             config.Logger.LogN
-                $"...done (time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+                $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
             tsList, formula
 
@@ -125,7 +125,7 @@ let private run (args : array<string>) =
                 InstanceParsing.readAndParseBooleanProgramInstance systemInputPaths formulaInputPath
 
             config.Logger.LogN
-                $"...done (time: %i{sw.ElapsedMilliseconds}ms (%.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+                $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
             config.Logger.LogN $"> Translation to explicit-state system..."
             sw.Restart()
@@ -151,7 +151,7 @@ let private run (args : array<string>) =
                     |> Result.defaultWith (fun err ->
                         raise
                         <| AutoHyperException
-                            $"Could not infer variable evaluation in the {i}th transition system: {err}"
+                            $"Error the {i}th transition system: {err}"
                     )
                 )
 
@@ -267,16 +267,18 @@ let main args =
         run args
     with
     | AutoHyperException err ->
-        printfn "Error during the analysis:"
+        printfn "=========== ERROR ==========="
         printfn $"{err}"
+        printfn "============================="
 
         if raiseExceptions then
             reraise ()
 
         exit -1
     | e ->
-        printfn "Unexpected Error during the analysis:"
+        printfn "=========== ERROR ==========="
         printfn $"{e.Message}"
+        printfn "============================="
 
         if raiseExceptions then
             reraise ()

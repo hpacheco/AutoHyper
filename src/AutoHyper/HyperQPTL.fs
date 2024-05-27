@@ -233,7 +233,7 @@ module Parser =
             between
                 (skipChar '{' .>> ws)
                 (skipChar '}')
-                (AtomExpression.Parser.atomExpressionParser expressionAtomParser .>> ws)
+                (AtomExpression.Parser.infixAtomExpressionParser expressionAtomParser .>> ws)
 
         let singleVariableAtom =
             pipe2
