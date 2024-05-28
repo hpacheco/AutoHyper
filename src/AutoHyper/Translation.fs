@@ -24,18 +24,19 @@ open TransitionSystemLib.SymbolicSystem
 open TransitionSystemLib.BooleanProgramSystem
 
 open Util
+open Configuration
 open AtomExpression
 open HyperQPTL
 
 
-let convertSymbolicSystemInstance (systemList : list<SymbolicSystem>) (formula : HyperQPTL<string>) : list<TransitionSystem<string>> =
+let convertSymbolicSystemInstance (logger: Logger) (systemList : list<SymbolicSystem>) (formula : HyperQPTL<string>) =
     match HyperQPTL.findError formula with
     | None -> ()
     | Some msg -> raise <| AutoHyperException $"Error in the HyperQPTL formula: %s{msg}"
 
     systemList
     |> List.iteri (fun i p ->
-        match SymbolicSystem.findError p with
+        match SymbolicSystem.findError logger.LogN p with
         | None -> ()
         | Some msg -> raise <| AutoHyperException $"Error in the %i{i}th system: %s{msg}"
     )
@@ -123,7 +124,7 @@ let convertSymbolicSystemInstance (systemList : list<SymbolicSystem>) (formula :
     tsList
 
 
-let convertBooleanProgramInstance (progList : list<BooleanProgram>) (formula : HyperQPTL<string * int>) : list<TransitionSystem<string>> * HyperQPTL<string> =
+let convertBooleanProgramInstance (progList : list<BooleanProgram>) (formula : HyperQPTL<string * int>) : list<TransitionSystem<string> * Map<int, string>> * HyperQPTL<string> =
     match HyperQPTL.findError formula with
     | None -> ()
     | Some msg -> raise <| AutoHyperException $"Error in the specification: %s{msg}"
@@ -209,7 +210,8 @@ let convertBooleanProgramInstance (progList : list<BooleanProgram>) (formula : H
 
     let mappedTs = 
         tsList
-        |> List.map (TransitionSystem.mapVariables (fun (var, index) -> var + "@" + string(index)))
+        |> List.map (fun (ts, printer) -> 
+            TransitionSystem.mapVariables (fun (var, index) -> var + "@" + string(index)) ts, printer)
             
     let mappedFormula = 
         formula

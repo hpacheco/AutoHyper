@@ -290,10 +290,10 @@ let private findAcceptingPaths
 
     config.Logger.LogN "========================= Emptiness Check + Witness ========================="
     config.Logger.LogN $"> size: %i{nba.Skeleton.States.Count}"
-    config.Logger.Log $"> Start lasso search..."
+    config.Logger.LogN $"> Start lasso search..."
 
     sw.Restart()
-    let res = AutomataUtil.shortestAcceptingPaths nba
+    let res = AutomataUtil.nestedDEFS nba
 
     config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
     config.Logger.LogN "=================================================="

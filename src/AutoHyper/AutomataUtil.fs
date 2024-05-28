@@ -22,73 +22,88 @@ open System.Collections.Generic
 open FsOmegaLib.SAT
 open FsOmegaLib.NBA
 
-open Util
-
-module private GraphUtil =
-
-    let shortestPathsBetweenAllPairs
-        (nodes : seq<'T>)
-        (forwardEdges : 'T -> seq<'E * 'T>)
-        (includeZeroLengthPaths : bool)
-        =
-        let next = new Dictionary<_, _>(Seq.length nodes * Seq.length nodes)
-
-        for n in nodes do
-            for (e, n') in forwardEdges n do
-                if Seq.contains n' nodes then
-                    // In case there are multiple edges we just take the first (has no impact as the length is the same)
-                    if next.ContainsKey(n, n') |> not then
-                        next.Add((n, n'), ([ e ], [ n; n' ]))
-
-            if includeZeroLengthPaths then
-                next.Remove((n, n)) |> ignore
-                next.Add((n, n), ([], [ n ]))
-
-        for k in nodes do
-            for i in nodes do
-                for j in nodes do
-                    if next.ContainsKey(i, k) && next.ContainsKey(k, j) then
-                        if
-                            next.ContainsKey(i, j) |> not
-                            || (next.[i, j] |> fst |> List.length > (next.[i, k] |> fst |> List.length)
-                                                                    + (next.[k, j] |> fst |> List.length)
-                                                                    + 1)
-                        then
-                            next.Remove((i, j)) |> ignore
-
-                            next.Add(
-                                (i, j),
-                                (fst next.[i, k] @ fst next.[k, j], snd next.[i, k] @ (next.[k, j] |> snd |> List.tail))
-                            )
-
-        next
-
 
 type Lasso<'L> = { Prefix : list<'L>; Loop : list<'L> }
 
 module Lasso =
     let length (lasso : Lasso<'L>) = lasso.Prefix.Length + lasso.Loop.Length
 
-let shortestAcceptingPaths (nba : NBA<'T, 'L>) =
+type private FoundCycle<'T> (state:'T) =
+    inherit System.Exception ()  
+
+    member this.State = state
+
+
+let nestedDEFS (nba : NBA<'T, 'L>) =
     let satEdges =
         nba.Edges |> Map.map (fun _ l -> l |> List.filter (fun (g, _) -> DNF.isSat g))
 
-    let res =
-        GraphUtil.shortestPathsBetweenAllPairs nba.States (fun x -> satEdges.[x]) false
+    let visitedOuter = new HashSet<_>()
+    let visitedInner = new HashSet<_>()
 
-    let a =
-        Seq.allPairs nba.InitialStates nba.AcceptingStates
-        |> Seq.filter (fun (init, acc) -> (res.ContainsKey(init, acc) || init = acc) && res.ContainsKey(acc, acc))
-        |> Seq.map (fun (init, acc) ->
-            {
-                Lasso.Prefix = if init = acc then [] else res.[init, acc] |> snd
-                Loop = res.[acc, acc] |> snd
-            }
-        )
+    let predDictOuter = new Dictionary<_,_>()
+    let predDictInner = new Dictionary<_,_>()
 
-    if Seq.isEmpty a then
+
+    let rec ndfs target s = 
+        visitedInner.Add s |> ignore 
+
+        for (_, t) in satEdges.[s] do 
+            if visitedInner.Contains t |> not then 
+                // Record that we explored t via s
+                predDictInner.Add(t, s)
+
+                ndfs target t
+            elif t = target then 
+                // Found a cycle
+                predDictInner.Add(t, s)
+                raise <| FoundCycle t
+
+    let rec dfs s = 
+        visitedOuter.Add s |> ignore 
+
+        for (_, t) in satEdges.[s] do 
+            if visitedOuter.Contains t |> not then 
+                // Record that we explored t via s
+                predDictOuter.Add(t, s)
+
+                dfs t 
+            
+        if nba.AcceptingStates.Contains s then 
+            // predDictInner.Clear()
+            ndfs s s
+
+    try 
+        for s in nba.InitialStates do 
+            // predDictOuter.Clear()
+            dfs s 
+    
         None
-    else
-        a |> Seq.minBy Lasso.length |> Some
+    with 
+    | :? FoundCycle<'T> as e -> 
 
+        let w = e.State
+        // Reconstruct the path 
 
+        let rec reconstructLoop s = 
+            if s = w then 
+                [s]
+            else 
+                reconstructLoop (predDictInner.[s]) @ [s]
+
+        let rec reconstructPrefix s = 
+            if Set.contains s nba.InitialStates then 
+                [s]
+            else 
+                reconstructPrefix (predDictOuter.[s]) @ [s]
+
+        {
+            Lasso.Prefix = 
+                if Set.contains w nba.InitialStates then 
+                    []
+                else                 
+                    reconstructPrefix (predDictOuter.[w])
+            Loop = reconstructLoop (predDictInner.[w])
+        }
+        |> Some
+    

@@ -22,6 +22,7 @@ open System.IO
 
 open Util
 open Configuration
+open AutomataUtil
 open ModelChecking
 
 open HyperQPTL
@@ -29,12 +30,30 @@ open CommandLineParser
 
 let mutable raiseExceptions = false
 
+let sw = System.Diagnostics.Stopwatch()
+
 let private writeFormulaAndSystemString
-    (systemOutputPaths : list<String>)
+    config
+    (systemInputPaths : list<string>)
+    (systemOutputPaths : list<string>)
     formulaOutputPath
-    (tsStringList : list<String>)
-    (formulaString : String)
+    tsList
+    formula
     =
+
+    config.Logger.LogN $"> Writing explicit-state instance to file"
+    sw.Restart()
+
+    if systemOutputPaths.Length <> systemInputPaths.Length then
+        raise
+        <| AutoHyperException "The number of output files must match the number of input"
+
+    let tsStringList =
+        tsList
+        |> List.map (TransitionSystemLib.TransitionSystem.TransitionSystem.print id)
+
+    let formulaString = HyperQPTL.print id formula
+
     (systemOutputPaths, tsStringList)
     ||> List.zip
     |> List.iter (fun (file, tsString) ->
@@ -49,10 +68,16 @@ let private writeFormulaAndSystemString
     with _ ->
         raise <| AutoHyperException $"Could not write to file %s{formulaOutputPath}"
 
+    config.Logger.LogN(
+        $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
+
+
+    
+
 
 let private run (args : array<string>) =
     let swTotal = System.Diagnostics.Stopwatch()
-    let sw = System.Diagnostics.Stopwatch()
+    
     swTotal.Start()
 
     sw.Restart()
@@ -64,25 +89,35 @@ let private run (args : array<string>) =
 
     let solverConfig = Configuration.getSolverConfiguration ()
 
+    let logger = 
+        {
+            Logger.Log =
+                fun s ->
+                    if cmdArgs.LogPrintouts then
+                        printf $"%s{s}"
+        }
+
     let config =
         {
             Configuration.SolverConfig = solverConfig
             ModelCheckingOptions =
                 {
-                    ModelCheckingOptions.ComputeBisimulation = cmdArgs.ComputeBisimulation
+                    ModelCheckingOptions.ComputeBisimulation = 
+                        if cmdArgs.ComputeWitnesses then 
+                            if cmdArgs.ComputeBisimulation then 
+                                logger.LogN "! Cannot compute witnesses AND utilize bisimulation quotients"
+                                logger.LogN "! We have disabled bisimulation quotients for the current run"
+                            false 
+                        else 
+                            cmdArgs.ComputeBisimulation
                     ComputeWitnesses = cmdArgs.ComputeWitnesses
                     IntermediateAutomatonSimplification = cmdArgs.IntermediateAutomatonSimplification
                     BlockProduct = true
 
                     Mode = cmdArgs.Mode
                 }
-            Logger =
-                {
-                    Logger.Log =
-                        fun s ->
-                            if cmdArgs.LogPrintouts then
-                                printf $"%s{s}"
-                }
+            Logger = logger
+                
             RaiseExceptions = cmdArgs.RaiseExceptions
         }
 
@@ -109,7 +144,7 @@ let private run (args : array<string>) =
             config.Logger.LogN $"> Translation to explicit-state system..."
             sw.Restart()
 
-            let tsList = Translation.convertSymbolicSystemInstance systemList formula
+            let tsList = Translation.convertSymbolicSystemInstance config.Logger systemList formula
 
 
             config.Logger.LogN
@@ -155,13 +190,25 @@ let private run (args : array<string>) =
                     )
                 )
 
+            let tsListWithPrinter = 
+                tsList
+                |> List.map (fun ts -> 
+                    
+                    let printer = 
+                        ts.States
+                        |> Seq.map (fun x -> x, string x)
+                        |> Map.ofSeq
+
+                    ts, printer
+                    )
+
             config.Logger.LogN
                 $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            tsList, formula
+            tsListWithPrinter, formula
 
     config.Logger.LogN
-        ("> system-sizes: [" + (tsList |> List.map (fun ts -> string ts.States.Count) |> String.concat "," ) + "]")
+        ("> system-sizes: [" + (tsList |> List.map (fun (ts, _) -> string ts.States.Count) |> String.concat "," ) + "]")
 
     let traceVarList = HyperQPTL.quantifiedTraceVariables formula
 
@@ -178,7 +225,7 @@ let private run (args : array<string>) =
 
             let bisim =
                 tsList
-                |> List.map (fun ts ->
+                |> List.map (fun (ts, _) ->
                     TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts
                     |> fst
                 )
@@ -187,18 +234,26 @@ let private run (args : array<string>) =
                 $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
 
             config.Logger.LogN
-                ("> system-sizes: [" + (tsList |> List.map (fun ts -> string ts.States.Count) |> String.concat "," ) + "]")
+                ("> system-sizes: [" + (bisim |> List.map (fun ts -> string ts.States.Count) |> String.concat "," ) + "]")
 
             bisim
+            // Add an empty printer map
+            |> List.map (fun ts -> ts, Map.empty)
         else
             tsList
 
 
     let tsMap =
         if tsList.Length = 1 then
-            traceVarList |> List.map (fun x -> x, tsList.[0]) |> Map.ofList
+            traceVarList |> List.map (fun x -> x, fst tsList.[0]) |> Map.ofList
         else
-            (traceVarList, tsList) ||> List.zip |> Map.ofList
+            (traceVarList, tsList |> List.map fst) ||> List.zip |> Map.ofList
+
+    let printerMap =
+        if tsList.Length = 1 then
+            traceVarList |> List.map (fun x -> x, snd tsList.[0]) |> Map.ofList
+        else
+            (traceVarList, tsList |> List.map snd) ||> List.zip |> Map.ofList
 
     match ModelCheckingUtil.findErrorOnModelCheckingInstance tsMap formula with
     | None -> ()
@@ -210,23 +265,7 @@ let private run (args : array<string>) =
     match cmdArgs.WriteExplicitInstance with
     | None -> ()
     | Some(systemOutputPaths, formulaOutputPath) ->
-        config.Logger.LogN $"> Writing explicit-state instance to file"
-        sw.Restart()
-
-        if systemOutputPaths.Length <> systemInputPaths.Length then
-            raise
-            <| AutoHyperException "The number of output files must match the number of input"
-
-        let tsStringList =
-            tsList
-            |> List.map (TransitionSystemLib.TransitionSystem.TransitionSystem.print id)
-
-        let formulaString = HyperQPTL.print id formula
-
-        writeFormulaAndSystemString systemOutputPaths formulaOutputPath tsStringList formulaString
-
-        config.Logger.LogN(
-            $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
+        writeFormulaAndSystemString config systemInputPaths systemOutputPaths formulaOutputPath (tsList |> List.map fst) formula
 
 
     if cmdArgs.Verify then
@@ -239,32 +278,40 @@ let private run (args : array<string>) =
 
         config.Logger.LogN ""
 
-        if res.IsSat then printfn "SAT" else printfn "UNSAT"
-
+    
         if cmdArgs.ComputeWitnesses then
             match res.WitnessPaths with
             | None -> ()
             | Some lassoMap ->
                 // We can assume that each DNF in this lasso is SAT
 
-                let printList (l : list<int>) =
-                    l |> List.map string |> String.concat " " |> (fun x -> "(" + x + ")")
+                let printLasso (pi) (lasso : Lasso<int>) =
+                    let printList l = 
+                        l 
+                        |> List.map (fun x -> printerMap.[pi].[x]) 
+                        |> String.concat " " 
+                        |> (fun x -> "(" + x + ")")
+                    
+                    $"{pi}: {printList lasso.Prefix} {printList lasso.Loop}"
 
+                printfn $"======= Witnesses ======="
                 lassoMap.Keys
                 |> Seq.iter (fun pi ->
                     let lasso = lassoMap.[pi]
-                    printfn $""
-                    printfn $"%s{pi}"
-                    printfn $"Prefix: %s{printList lasso.Prefix}"
-                    printfn $"Loop: %s{printList lasso.Loop}"
+                    
+                    printfn $"%s{printLasso pi lasso}"
+                    
                 )
+                printfn $"=========================\n"
 
+        if res.IsSat then printfn "SAT" else printfn "UNSAT"
     0
 
 [<EntryPoint>]
 let main args =
     try
         run args
+        //run [|"--explicit"; "--log"; "/Users/ravenbeutner/Documents/Cispa/Projects/PublicRepos/autohyper/AutoHyper/test/system2.txt"; "/Users/ravenbeutner/Documents/Cispa/Projects/PublicRepos/autohyper/AutoHyper/test/prop2.txt"; "--witness"|]
     with
     | AutoHyperException err ->
         printfn "=========== ERROR ==========="
