@@ -103,10 +103,9 @@ let private run (args : array<string>) =
             ModelCheckingOptions =
                 {
                     ModelCheckingOptions.ComputeBisimulation = 
-                        if cmdArgs.ComputeWitnesses then 
-                            if cmdArgs.ComputeBisimulation then 
-                                logger.LogN "! Cannot compute witnesses AND utilize bisimulation quotients"
-                                logger.LogN "! We have disabled bisimulation quotients for the current run"
+                        if cmdArgs.ComputeWitnesses && cmdArgs.ComputeBisimulation then 
+                            logger.LogN "! Cannot compute witnesses AND utilize bisimulation quotients"
+                            logger.LogN "! We have disabled bisimulation quotients"
                             false 
                         else 
                             cmdArgs.ComputeBisimulation
@@ -114,7 +113,13 @@ let private run (args : array<string>) =
                     IntermediateAutomatonSimplification = cmdArgs.IntermediateAutomatonSimplification
                     BlockProduct = true
 
-                    Mode = cmdArgs.Mode
+                    Mode = 
+                        if cmdArgs.ComputeWitnesses && cmdArgs.Mode <> COMP then 
+                            logger.LogN "! Cannot compute witnesses AND use inclusion checks"
+                            logger.LogN "! We have switched to mode '--comp'"
+                            COMP 
+                        else 
+                            cmdArgs.Mode
                 }
             Logger = logger
                 
