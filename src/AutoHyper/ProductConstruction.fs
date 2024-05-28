@@ -27,7 +27,7 @@ open FsOmegaLib.NBA
 
 open Util
 open AtomExpression
-open HyperLTL
+open HyperQPTL
 
 let constructAutomatonSystemProduct
     (nba : NBA<'Astate, AtomExpression<'L * TraceVariable>>)

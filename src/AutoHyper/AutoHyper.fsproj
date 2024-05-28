@@ -10,7 +10,6 @@
     <Compile Include="Configuration.fs" />
     <Compile Include="AtomExpression.fs" />
     <Compile Include="HyperQPTL.fs" />
-    <Compile Include="HyperLTL.fs" />
     <Compile Include="ExplicitAutomaton.fs" />
     <Compile Include="ProductConstruction.fs" />
     <Compile Include="AutomataUtil.fs" />

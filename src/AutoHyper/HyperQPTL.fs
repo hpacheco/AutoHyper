@@ -167,19 +167,78 @@ module HyperQPTL =
 
         prefixString + " " + ltlString
 
-(*
-let extractBlocks (qf : list<TraceQuantifierType>) =
-    let rec helper t count q =
-        match q with
-        | [] -> [ count ]
-        | x :: xs ->
-            if x = t then
-                helper t (count + 1) xs
-            else
-                count :: helper x 1 xs
 
-    helper qf.[0] 0 qf
-*)
+
+type HyperLTL<'L when 'L : comparison> =
+    {
+        QuantifierPrefix : list<QuantifierType * TraceVariable>
+        LTLMatrix : LTL<AtomExpression<'L * TraceVariable>>
+    }
+
+module HyperLTL =
+    let quantifiedTraceVariables (formula : HyperLTL<'L>) =
+        formula.QuantifierPrefix |> List.map snd
+
+    let map f (formula : HyperLTL<'L>) =
+        {
+            QuantifierPrefix = formula.QuantifierPrefix
+            LTLMatrix = formula.LTLMatrix |> LTL.map (AtomExpression.map (fun (x, pi) -> f x, pi))
+        }
+
+    exception private FoundError of string
+
+    let findError (formula : HyperLTL<'L>) =
+        let traceVars = quantifiedTraceVariables formula
+
+        try
+            traceVars
+            |> List.groupBy id
+            |> List.iter (fun (pi, l) ->
+                if List.length l > 1 then
+                    raise <| FoundError $"Trace variable {pi} is used more than once"
+            )
+
+            LTL.allAtoms formula.LTLMatrix
+            |> Set.iter (fun x ->
+                x
+                |> AtomExpression.allVars
+                |> Set.iter (fun (_, pi) ->
+                    if List.contains pi traceVars |> not then
+                        raise
+                        <| FoundError $"Trace variable '{pi}' is used but not defined in the prefix"
+                )
+            )
+
+            None
+
+        with FoundError msg ->
+            Some msg
+
+    let print (varNames : 'L -> string) (formula : HyperLTL<'L>) =
+        let prefixString =
+            formula.QuantifierPrefix
+            |> List.map (fun (q, pi) -> 
+                match q with
+                | FORALL -> "forall " + pi + ". "
+                | EXISTS -> "exists " + pi + ". "
+            )
+            |> String.concat " "
+
+        let varStringer (x, pi) = "{" + varNames x + "}_" + pi
+
+        let expressionStringer e =
+            match e with
+            | Variable x ->
+                // Single variable, print directly with parenthesis
+                varStringer x
+            | _ -> "[" + AtomExpression.print varStringer e + "]"
+
+        let ltlString = LTL.printInSpotFormat expressionStringer formula.LTLMatrix
+
+        prefixString + " " + ltlString
+
+
+
 
 module Parser =
     open FParsec
