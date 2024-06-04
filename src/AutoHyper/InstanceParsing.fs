@@ -20,6 +20,7 @@ module InstanceParsing
 open System.IO
 
 open Util
+open HyperQPTL
 
 let readAndParseSymbolicInstance systemInputPaths formulaInputPath =
     let systemList =
@@ -77,13 +78,13 @@ let readAndParseBooleanProgramInstance systemInputPaths formulaInputPath =
         with _ ->
             raise <| AutoHyperException $"Could not open/read file %s{formulaInputPath}"
 
-
     let formula =
         HyperQPTL.Parser.parseHyperQPTLBooleanProgram propContent
         |> Result.defaultWith (fun err ->
             raise
             <| AutoHyperException $"The HyperQPTL formula could not be parsed: %s{err}"
         )
+        |> HyperQPTL.map (fun (var, index) -> var + "@" + string(index))
 
     programList, formula
 
@@ -119,3 +120,5 @@ let readAndParseExplicitInstance systemInputPaths formulaInputPath =
         )
 
     explicitTsList, formula
+
+

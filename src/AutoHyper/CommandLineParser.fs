@@ -98,6 +98,10 @@ type CommandLineArguments =
         ComputeBisimulation : bool
         IntermediateAutomatonSimplification : bool
 
+        FlattenBooleanExpressions : bool
+
+        UnfoldAtomicExpressions : bool
+
         LogPrintouts : bool // If set to true, we log intermediate steps to the console
         RaiseExceptions : bool // If set to true, we raise exceptions
     }
@@ -114,6 +118,10 @@ type CommandLineArguments =
             ComputeWitnesses = false
             ComputeBisimulation = true
             IntermediateAutomatonSimplification = false
+
+            FlattenBooleanExpressions = false
+
+            UnfoldAtomicExpressions = false
 
             LogPrintouts = false
             RaiseExceptions = false
@@ -157,6 +165,8 @@ let parseCommandLineArguments (args : list<string>) =
             | "--log" -> parseArgumentsRec xs { opt with LogPrintouts = true }
             | "--no-verification" -> parseArgumentsRec xs { opt with Verify = false }
             | "--witness" -> parseArgumentsRec xs { opt with ComputeWitnesses = true }
+            | "--flatten" -> parseArgumentsRec xs { opt with FlattenBooleanExpressions = true }
+            | "--unfold" -> parseArgumentsRec xs { opt with UnfoldAtomicExpressions = true }
             | "--no-bisim" -> parseArgumentsRec xs { opt with ComputeBisimulation = false }
             | "--simplification" ->
                 parseArgumentsRec

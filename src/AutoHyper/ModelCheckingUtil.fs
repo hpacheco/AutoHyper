@@ -18,11 +18,14 @@
 module ModelCheckingUtil
 
 open System
+open System.Collections.Generic
 
 open FsOmegaLib.LTL
 
 open TransitionSystemLib.TransitionSystem
 
+open Util
+open Configuration
 open AtomExpression
 open HyperQPTL
 open HyperLTL
@@ -118,3 +121,130 @@ let findErrorOnModelCheckingInstance (tsMap : Map<TraceVariable, TransitionSyste
         None
     with FoundError msg ->
         Some msg
+
+
+let computeBisimulationQuotients (logger : Logger) (tsMap : Map<TraceVariable, TransitionSystemWithPrinter<string>>) = 
+    let sw = System.Diagnostics.Stopwatch()
+
+    let quotientDict = new Dictionary<_, _>()
+
+    let bisimTsMap =
+        tsMap
+        |> Map.map (fun _ ts -> 
+            logger.LogN $"> Computing bisimulation quotients..."
+            sw.Restart()
+
+            let bisimTs = 
+
+                if quotientDict.ContainsKey ts.TransitionSystem then
+                    let res = quotientDict.[ts.TransitionSystem]
+                    logger.LogN $"  ...hashed (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+                    res
+                else
+                    let bisimTs = 
+                        TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts.TransitionSystem
+                        |> fst
+
+                    quotientDict.Add(ts.TransitionSystem, bisimTs)
+
+                    logger.LogN(
+                        $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
+
+                    bisimTs
+
+            {
+                TransitionSystemWithPrinter.TransitionSystem = bisimTs
+                Printer = Map.empty
+            }
+        )
+
+    bisimTsMap
+
+let flattenBooleanExpression (tsMap : Map<TraceVariable, TransitionSystemWithPrinter<string>>) (formula : HyperQPTL<string>) = 
+    let allUnaryAtoms = 
+        LTL.allAtoms formula.LTLMatrix
+        |> Seq.choose (fun e -> 
+            let traceVariables = 
+                AtomExpression.allVars e 
+                |> Seq.choose (function 
+                    | TraceAtom(_, pi) -> Some pi
+                    | PropAtom _ -> None
+                    )
+                |> Seq.distinct
+
+            let containsPropAtom = 
+                AtomExpression.allVars e 
+                |> Seq.exists (function 
+                    | TraceAtom _ -> false
+                    | PropAtom _ -> true
+                    )
+
+            if (not containsPropAtom) && Seq.length traceVariables = 1 then 
+                // The expression refers to a unique trace variable, so should be flattened
+                Some (e, Seq.head traceVariables)
+            else 
+                None
+            )
+
+    let updatedTsMap, updatedLtlMatrix, _ = 
+        ((tsMap, formula.LTLMatrix, 0), allUnaryAtoms)
+        ||> Seq.fold (fun (tsMap, ltl, i) (e, pi) -> 
+            
+            let freshVariableName = "@" + string i
+
+            let prevTs = tsMap.[pi].TransitionSystem
+            let printer = tsMap.[pi].Printer
+
+            // Update the TS by adding the Boolean variable `freshVariableName` as a shorthand for `e`
+            let updatedTs = 
+                {
+                    TransitionSystem.States = prevTs.States
+                    InitialStates = prevTs.InitialStates
+                    VariableType = prevTs.VariableType |> Map.add freshVariableName VariableType.Bool  
+                    Edges = prevTs.Edges
+                    VariableEval = 
+                        prevTs.VariableEval 
+                        |> Map.map (fun _ varEval -> 
+                            // Check if the expression holds in the given state
+                            let b = 
+                                e
+                                |> AtomExpression.bind (function 
+                                    | PropAtom _ -> failwith ""
+                                    | TraceAtom (var, _) -> 
+                                        // We can ignore the trace variable, as we now that it will be `pi`
+                                    
+                                        match varEval.[var] with
+                                        | TransitionSystemLib.TransitionSystem.VariableValue.IntValue i -> IntConstant i
+                                        | TransitionSystemLib.TransitionSystem.VariableValue.BoolValue b ->
+                                            BoolConstant b
+                                )
+                                |> AtomExpression.simplify
+                                |> function
+                                    | BoolConstant b -> b
+                                    | _ -> raise <| AutoHyperException "Atomic expression evaluate to non-Boolean value"
+
+                            varEval
+                            |> Map.add freshVariableName (VariableValue.BoolValue b)
+                            )
+                }
+
+            let updatedFormula = 
+                ltl 
+                |> LTL.bind (fun ee -> 
+                    if e = ee then 
+                        // Replace the expression with the shortcut
+                        Atom (AtomExpression.Variable (TraceAtom(freshVariableName, pi)))
+                    else 
+                        Atom ee
+                    )
+
+            Map.add pi {TransitionSystemWithPrinter.TransitionSystem = updatedTs; Printer = printer} tsMap, updatedFormula, i + 1
+            )
+
+
+    updatedTsMap, {HyperQPTL.QuantifierPrefix = formula.QuantifierPrefix; LTLMatrix = updatedLtlMatrix}
+
+
+let unfoldAtomicExpressions (tsMap : Map<TraceVariable, TransitionSystemWithPrinter<string>>) (formula : HyperQPTL<string>) = 
+    // TODO
+    tsMap, formula

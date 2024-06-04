@@ -28,12 +28,12 @@ open AutomataUtil
 open ModelChecking
 
 open HyperQPTL
+open Translation
 open CommandLineParser
 
 let mutable raiseExceptions = false
 
 let sw = System.Diagnostics.Stopwatch()
-
 
 let private writeFormulaAndSystemString
     config
@@ -111,6 +111,9 @@ let private run (args : array<string>) =
                     IntermediateAutomatonSimplification = cmdArgs.IntermediateAutomatonSimplification
                     BlockProduct = true
 
+                    FlattenBooleanExpressions = cmdArgs.FlattenBooleanExpressions
+                    UnfoldAtomicExpressions = cmdArgs.UnfoldAtomicExpressions
+
                     Mode = 
                         if cmdArgs.ComputeWitnesses && cmdArgs.Mode <> COMP then 
                             logger.LogN "! Cannot compute witnesses AND use inclusion checks"
@@ -132,7 +135,7 @@ let private run (args : array<string>) =
         cmdArgs.InputFiles
         |> Option.defaultWith (fun () -> raise <| AutoHyperException "No input files given")
 
-    let tsList, formula =
+    let systemList, formula =
         match cmdArgs.InputType with
         | SymbolicSystem ->
             config.Logger.LogN $"> Parsing model-checking instance (--nusmv)..."
@@ -144,17 +147,7 @@ let private run (args : array<string>) =
             config.Logger.LogN
                 $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            config.Logger.LogN $"> Translation to explicit-state system..."
-            sw.Restart()
-
-            let tsList = Translation.convertSymbolicSystemInstance config.Logger systemList formula
-
-
-            config.Logger.LogN
-                $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
-
-            tsList, formula
-
+            systemList |> List.map Translation.SymbolicSystem, formula
         | BooleanProgramSystem ->
             config.Logger.LogN $"> Parsing model-checking instance (--bp)..."
             sw.Restart()
@@ -165,16 +158,7 @@ let private run (args : array<string>) =
             config.Logger.LogN
                 $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            config.Logger.LogN $"> Translation to explicit-state system..."
-            sw.Restart()
-
-            let tsList, formula = Translation.convertBooleanProgramInstance programList formula
-
-            config.Logger.LogN
-                $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
-
-            tsList, formula
-
+            programList |> List.map Translation.BooleanProgram, formula
         | ExplicitSystem ->
             config.Logger.LogN $"> Parsing model-checking instance (--explicit)..."
             sw.Restart()
@@ -193,73 +177,83 @@ let private run (args : array<string>) =
                     )
                 )
 
-            let tsListWithPrinter = 
-                tsList
-                |> List.map (fun ts -> 
-                    {
-                        TransitionSystemWithPrinter.TransitionSystem = ts 
-                        Printer = 
-                            ts.States
-                            |> Seq.map (fun x -> x, string x)
-                            |> Map.ofSeq
-                    }
-                    )
-
             config.Logger.LogN
-                $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+                $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            tsListWithPrinter, formula
-
-    config.Logger.LogN
-        ("> system-sizes: [" + (tsList |> List.map (fun ts -> string ts.TransitionSystem.States.Count) |> String.concat "," ) + "]")
+            tsList |> List.map Translation.ExplicitStateSystem, formula
 
     let traceVarList = HyperQPTL.quantifiedTraceVariables formula
 
-    if tsList.Length <> 1 && tsList.Length <> traceVarList.Length then
+    if systemList.Length <> 1 && systemList.Length <> traceVarList.Length then
         raise
-        <| AutoHyperException "The number of systems does not match the number of quantified traces"
+        <| AutoHyperException $"The number of systems does not match the number of quantified traces ({systemList.Length})"
 
-    let tsList =
-        if config.ModelCheckingOptions.ComputeBisimulation then
-            // Compute bisimulation quotient
+
+    let systemMap =
+        if systemList.Length = 1 then
+            traceVarList |> List.map (fun x -> x, systemList.[0]) |> Map.ofList
+        else
+            (traceVarList, systemList) ||> List.zip |> Map.ofList
+
+    let tsMap = 
+        Translation.convertToTransitionSystems config.Logger systemMap formula
+
+    config.Logger.LogN
+        ("> system-sizes: [" + (traceVarList |> List.map (fun pi -> string tsMap.[pi].TransitionSystem.States.Count) |> String.concat "," ) + "]")
+
+    
+    // If desired, we unfold all expression so that all expressions are unary 
+    let tsMap, formula = 
+        if config.ModelCheckingOptions.UnfoldAtomicExpressions then 
+            config.Logger.LogN $"> Unfold atomic expression..."
             sw.Restart()
 
-            config.Logger.LogN $"> Computing bisimulation quotients..."
-
-            let bisim =
-                tsList
-                |> List.map (fun ts ->
-                    {
-                        TransitionSystemWithPrinter.TransitionSystem = 
-                            TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts.TransitionSystem
-                            |> fst
-                        Printer = Map.empty
-                    }
-                    
-                )
-
-            config.Logger.LogN(
-                $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
+            let res = ModelCheckingUtil.unfoldAtomicExpressions tsMap formula
 
             config.Logger.LogN
-                ("> system-sizes: [" + (bisim |> List.map (fun ts -> string ts.TransitionSystem.States.Count) |> String.concat "," ) + "]")
+                $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            bisim
-        else
-            tsList
+            res
+        else 
+            tsMap, formula
 
+    // If desired, we flatten unary expression by replacing them with fresh Boolean variables
+    let tsMap, formula = 
+        if config.ModelCheckingOptions.FlattenBooleanExpressions then 
+            config.Logger.LogN $"> Flatten unary atomic expressions ..."
+            sw.Restart()
 
+            let res = ModelCheckingUtil.flattenBooleanExpression tsMap formula
+
+            config.Logger.LogN
+                $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+
+            res
+        else 
+            tsMap, formula
+
+   
     let tsMap =
-        if tsList.Length = 1 then
-            traceVarList |> List.map (fun x -> x, tsList.[0].TransitionSystem) |> Map.ofList
+        if config.ModelCheckingOptions.ComputeBisimulation then
+            let bisimTsMap =
+                ModelCheckingUtil.computeBisimulationQuotients config.Logger tsMap
+
+            config.Logger.LogN
+                ("> system-sizes: [" + (traceVarList |> List.map (fun pi -> string bisimTsMap.[pi].TransitionSystem.States.Count) |> String.concat "," ) + "]")
+
+            bisimTsMap
         else
-            (traceVarList, tsList |> List.map (fun x -> x.TransitionSystem)) ||> List.zip |> Map.ofList
+            tsMap
+
 
     let printerMap =
-        if tsList.Length = 1 then
-            traceVarList |> List.map (fun x -> x, tsList.[0].Printer) |> Map.ofList
-        else
-            (traceVarList, tsList |> List.map (fun x -> x.Printer)) ||> List.zip |> Map.ofList
+        tsMap
+        |> Map.map (fun _ ts -> ts.Printer)
+
+    let tsMap =
+        tsMap
+        |> Map.map (fun _ ts -> ts.TransitionSystem)
+    
 
     match ModelCheckingUtil.findErrorOnModelCheckingInstance tsMap formula with
     | None -> ()
@@ -270,8 +264,7 @@ let private run (args : array<string>) =
 
     if cmdArgs.WriteExplicitInstance then
         writeFormulaAndSystemString config tsMap formula
-
-
+        
     if cmdArgs.Verify then
         let tsMap, formula = ModelCheckingUtil.convertToHyperLTL tsMap formula
 
@@ -292,7 +285,18 @@ let private run (args : array<string>) =
                 let printLasso (pi) (lasso : Lasso<int>) =
                     let printList l = 
                         l 
-                        |> List.map (fun x -> printerMap.[pi].[x]) 
+                        |> List.map (fun x -> 
+                            if Map.containsKey pi printerMap then 
+                                printerMap.[pi].[x]
+                            else 
+                                // The trace is added during the HyperQPTL to HyperLTL translation
+                                // In the dummy system, state 0 maps to true, state 1 to false
+                                match x with 
+                                | 0 -> "t"
+                                | 1 -> "f"
+                                | _ -> raise <| AutoHyperException "Unexpected state"
+                            
+                            ) 
                         |> String.concat " " 
                         |> (fun x -> "(" + x + ")")
                     
@@ -315,6 +319,7 @@ let private run (args : array<string>) =
 let main args =
     try
         run args
+
     with
     | AutoHyperException err ->
         printfn "=========== ERROR ==========="

@@ -17,6 +17,9 @@
 
 module Translation
 
+open System
+open System.Collections.Generic
+
 open FsOmegaLib.LTL
 
 open TransitionSystemLib.TransitionSystem
@@ -29,196 +32,211 @@ open AtomExpression
 open HyperQPTL
 
 
-let convertSymbolicSystemInstance (logger: Logger) (systemList : list<SymbolicSystem>) (formula : HyperQPTL<string>) =
+type TransitionSystemType =
+    | ExplicitStateSystem of TransitionSystem<string>
+    | SymbolicSystem of SymbolicSystem
+    | BooleanProgram of BooleanProgram
+
+
+let private restrictVariables (variables : Set<'L>) (ts : TransitionSystem<'L>) =
+    {
+        TransitionSystem.States = ts.States
+        InitialStates = ts.InitialStates
+        VariableType = ts.VariableType |> Map.filter (fun v _ -> Set.contains v variables)
+        Edges = ts.Edges
+        VariableEval =
+            ts.VariableEval
+            |> Map.map (fun _ m -> m |> Map.filter (fun v _ -> Set.contains v variables))
+    }
+
+
+let private convertSymbolicSystem (relevantIdentifierList) (sys : SymbolicSystem) =
+    relevantIdentifierList
+    |> List.iter (fun x ->
+        try
+            // We infer the type of the variable, to see if it is defined
+            TransitionSystemLib.SymbolicSystem.SymbolicSystem.inferTypeOfExpression
+                sys
+                (TransitionSystemLib.SymbolicSystem.Expression.Var x)
+            |> ignore
+        with TypeInferenceException err ->
+            raise
+            <| AutoHyperException
+                $"The identifier '{x}' is used in the HyperQPTL formula but no type for '{x}' could be inferred in the system: {err} "
+    )
+
+    SymbolicSystem.convertSymbolicSystemToTransitionSystem sys relevantIdentifierList
+
+
+let private convertBooleanProgram (relevantIdentifierList : list<string>) (bp : BooleanProgram) =
+    // We need to parse the string-valued variables into variables of the form '(var, i)'
+    let relevantIdentifierList =
+        relevantIdentifierList
+        |> List.map (fun x ->
+            let res = x.Split('@')
+
+            match res with
+            | [| a; b |] ->
+                let i =
+                    try
+                        Int32.Parse b
+                    with _ ->
+                        raise
+                        <| AutoHyperException
+                            $"Variable {x} is resolved on a Boolean system but does not have the correct form (...@i)"
+
+                (a, i)
+            | _ ->
+                raise
+                <| AutoHyperException
+                    $"Variable {x} is resolved on a Boolean system but does not have the correct form (...@i)"
+        )
+
+    relevantIdentifierList
+    |> List.iter (fun (v, i) ->
+        if (bp.DomainMap.ContainsKey v && i < bp.DomainMap.[v]) |> not then
+            raise
+            <| AutoHyperException
+                $"AP '(%A{v}, %i{i})' is used in the HyperQPTL formula but variable '%A{v}' does not exists or does not have not the required bit width"
+    )
+
+    let ts =
+        BooleanProgram.convertBooleanProgramToTransitionSystem bp relevantIdentifierList
+
+    {
+        TransitionSystem =
+            TransitionSystem.mapVariables (fun (var, index) -> var + "@" + string (index)) ts.TransitionSystem
+        Printer = ts.Printer
+    }
+
+let convertToTransitionSystems (logger : Logger) (systemMap : Map<TraceVariable, TransitionSystemType>) (formula : HyperQPTL<string>) =
+    let sw = System.Diagnostics.Stopwatch()
+
     match HyperQPTL.findError formula with
     | None -> ()
     | Some msg -> raise <| AutoHyperException $"Error in the HyperQPTL formula: %s{msg}"
 
-    systemList
-    |> List.iteri (fun i p ->
-        match SymbolicSystem.findError logger.LogN p with
-        | None -> ()
-        | Some msg -> raise <| AutoHyperException $"Error in the %i{i}th system: %s{msg}"
+    systemMap
+    |> Map.iter (fun pi s ->
+        match s with
+        | ExplicitStateSystem ts ->
+            match TransitionSystem.findError ts with
+            | None -> ()
+            | Some msg -> raise <| AutoHyperException $"Error in the '{pi}' system: %s{msg}"
+
+        | SymbolicSystem sys ->
+            match SymbolicSystem.findError logger.LogN sys with
+            | None -> ()
+            | Some msg -> raise <| AutoHyperException $"Error in the '{pi}' system: %s{msg}"
+
+        | BooleanProgram bp ->
+            match BooleanProgram.findError bp with
+            | None -> ()
+            | Some msg -> raise <| AutoHyperException $"Error in the '{pi}' system: %s{msg}"
     )
 
-    if systemList.Length <> 1 && systemList.Length <> formula.QuantifierPrefix.Length then
-        raise <| AutoHyperException $"Invalid number of programs"
+    let variablesPerTraceVariable =
+        formula.LTLMatrix
+        |> LTL.allAtoms
+        |> Set.map AtomExpression.allVars
+        |> Set.unionMany
+        |> Seq.choose (
+            function
+            | TraceAtom(var, pi) -> Some(var, pi)
+            | PropAtom _ -> None
+        )
+        |> Seq.groupBy snd
+        |> Seq.map (fun (pi, l) -> pi, l |> Seq.map fst |> set)
+        |> Map.ofSeq
+
+    // Reverse the mapping to identify multiple trace variables that are resolved on the same system (leading to better )
+    let revSystemMap =
+        systemMap
+        |> Map.toSeq
+        |> Seq.groupBy snd
+        |> Seq.map (fun (s, l) -> s, l |> Seq.map fst |> set)
+        |> Map.ofSeq
+
+    let symbolicSystemDict = new Dictionary<_, _>()
+    let booleanProgramDict = new Dictionary<_, _>()
 
 
-    let tsList =
-        if systemList.Length = 1 then
-            // A single system where all traces are resolved on
-            let relevantIdentifierList =
-                formula.LTLMatrix
-                |> LTL.allAtoms
-                |> Seq.map (AtomExpression.allVars)
-                |> Set.unionMany
-                |> Seq.choose (fun x ->
-                    match x with
-                    | TraceAtom(var, _) -> Some var
-                    | PropAtom _ -> None
-                )
-                |> Seq.distinct
-                |> Seq.toList
+    let tsMap =
+        systemMap
+        |> Map.map (fun pi s ->
 
-            relevantIdentifierList
-            |> List.iter (fun x ->
-                try
-                    // We infer the type of the variable, to see if it is defined
-                    TransitionSystemLib.SymbolicSystem.SymbolicSystem.inferTypeOfExpression
-                        systemList.[0]
-                        (TransitionSystemLib.SymbolicSystem.Expression.Var x)
-                    |> ignore
-                with TypeInferenceException err ->
-                    raise
-                    <| AutoHyperException
-                        $"The identifier '{x}' is used in the HyperQPTL formula but no type for '{x}' could be inferred in the system: {err} "
-            )
+            let ts =
+                match s with
+                | ExplicitStateSystem ts ->
+                    {
+                        TransitionSystemWithPrinter.TransitionSystem = ts
+                        // Add a printer for each state which just prints the ID
+                        Printer = ts.States |> Seq.map (fun x -> x, string x) |> Map.ofSeq
+                    }
 
-            SymbolicSystem.convertSymbolicSystemToTransitionSystem systemList.[0] relevantIdentifierList
-            |> List.singleton
-        else
-            let indexMapping =
-                formula
-                |> HyperQPTL.quantifiedTraceVariables
-                |> List.mapi (fun i pi -> pi, i)
-                |> Map.ofList
+                | SymbolicSystem sys ->
+                    logger.LogN $"> Translating symbolic system to explicit-state system..."
+                    sw.Restart()
 
-            // Multiple systems, so each is resolved on a separate systems
-            formula
-            |> HyperQPTL.quantifiedTraceVariables
-            |> List.map (fun pi ->
-                let relevantIdentifierList =
-                    formula.LTLMatrix
-                    |> LTL.allAtoms
-                    |> Seq.map (AtomExpression.allVars)
-                    |> Set.unionMany
-                    |> Seq.choose (fun x ->
-                        match x with
-                        | TraceAtom(var, pii) when pi = pii -> Some var
-                        | TraceAtom _ -> None
-                        | PropAtom _ -> None
-                    )
-                    |> Seq.distinct
-                    |> Seq.toList
+                    if symbolicSystemDict.ContainsKey sys then
+                        let res = symbolicSystemDict.[sys]
+                        logger.LogN $"  ...hashed (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+                        res
+                    else
+                        // The system has not been converted yet
+                        // Before the conversion, we gather all variables that will be needed on this system
 
-                let symbolicSystem = systemList.[indexMapping.[pi]]
+                        let relevantIdentifierList =
+                            revSystemMap.[SymbolicSystem sys]
+                            |> Set.map (fun pi -> variablesPerTraceVariable.[pi])
+                            |> Set.unionMany
+                            |> Set.toList
 
-                relevantIdentifierList
-                |> List.iter (fun x ->
-                    try
-                        // We infer the type of the variable, to see if it is defined
-                        TransitionSystemLib.SymbolicSystem.SymbolicSystem.inferTypeOfExpression
-                            symbolicSystem
-                            (TransitionSystemLib.SymbolicSystem.Expression.Var x)
-                        |> ignore
-                    with TypeInferenceException err ->
-                        raise
-                        <| AutoHyperException
-                            $"The identifier '({x}, {pi})' is used in the HyperQPTL formula but no type for '{x}' could be inferred in the system for '{pi}': {err} "
-                )
+                        let ts = convertSymbolicSystem relevantIdentifierList sys
 
-                SymbolicSystem.convertSymbolicSystemToTransitionSystem symbolicSystem relevantIdentifierList
-            )
+                        logger.LogN
+                            $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-    tsList
+                        symbolicSystemDict.Add(sys, ts)
 
+                        ts
 
-let convertBooleanProgramInstance (progList : list<BooleanProgram>) (formula : HyperQPTL<string * int>) =
-    match HyperQPTL.findError formula with
-    | None -> ()
-    | Some msg -> raise <| AutoHyperException $"Error in the specification: %s{msg}"
+                | BooleanProgram bp ->
+                    logger.LogN $"> Translating boolean program to explicit-state system..."
+                    sw.Restart()
 
-    progList
-    |> List.iteri (fun i p ->
-        match BooleanProgram.findError p with
-        | None -> ()
-        | Some msg -> raise <| AutoHyperException $"Error in the %i{i}th system: %s{msg}"
-    )
+                    if booleanProgramDict.ContainsKey bp then
+                        
+                        let res = booleanProgramDict.[bp]
+                        logger.LogN $"  ...hashed (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+                        res 
+                    else
+                        // The system has not been converted yet
+                        // Before the conversion, we gather all variables that will be needed on this system
 
-    if progList.Length <> 1 && progList.Length <> formula.QuantifierPrefix.Length then
-        raise <| AutoHyperException $"Invalid number of programs"
+                        let relevantIdentifierList : string list =
+                            revSystemMap.[BooleanProgram bp]
+                            |> Set.map (fun pi -> variablesPerTraceVariable.[pi])
+                            |> Set.unionMany
+                            |> Set.toList
 
-    let tsList =
-        if progList.Length = 1 then
-            let prog = progList[0]
+                        let ts = convertBooleanProgram relevantIdentifierList bp
 
-            let relevantIdentifierList =
-                formula.LTLMatrix
-                |> LTL.allAtoms
-                |> Seq.map (AtomExpression.allVars)
-                |> Set.unionMany
-                |> Seq.choose (fun x ->
-                    match x with
-                    | TraceAtom(x, _) -> Some x
-                    | PropAtom _ -> None
-                )
-                |> Seq.distinct
-                |> Seq.toList
+                        logger.LogN
+                            $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
-            relevantIdentifierList
-            |> List.iter (fun (v, i) ->
-                if (prog.DomainMap.ContainsKey v && i < prog.DomainMap.[v]) |> not then
-                    raise
-                    <| AutoHyperException
-                        $"AP '(%A{v}, %i{i})' is used in the HyperQPTL formula but variable '%A{v}' does not exists or does not have not the required bit width"
-            )
+                        booleanProgramDict.Add(bp, ts)
 
-            BooleanProgram.convertBooleanProgramToTransitionSystem prog relevantIdentifierList
-            |> List.singleton
-        else
-            let indexMapping =
-                formula
-                |> HyperQPTL.quantifiedTraceVariables
-                |> List.mapi (fun i pi -> pi, i)
-                |> Map.ofList
+                        ts
 
-
-            formula
-            |> HyperQPTL.quantifiedTraceVariables
-            |> List.map (fun pi ->
-                let relevantIdentifierList =
-                    formula.LTLMatrix
-                    |> LTL.allAtoms
-                    |> Seq.map (AtomExpression.allVars)
-                    |> Set.unionMany
-                    |> Seq.choose (fun x ->
-                        match x with
-                        | TraceAtom(var, pii) when pi = pii -> Some var
-                        | TraceAtom _ -> None
-                        | PropAtom _ -> None
-                    )
-                    |> Seq.distinct
-                    |> Seq.toList
-
-                relevantIdentifierList
-                |> List.iter (fun (v, j) ->
-                    if
-                        (progList.[indexMapping.[pi]].DomainMap.ContainsKey v
-                         && j < progList.[indexMapping.[pi]].DomainMap.[v])
-                        |> not
-                    then
-                        raise
-                        <| AutoHyperException
-                            $"AP '(%A{v}, %i{j})' is used in the HyperQPTL formula but variable '%A{v}' does not exists or does not have not the required bit width"
-                )
-
-                BooleanProgram.convertBooleanProgramToTransitionSystem
-                    progList.[indexMapping.[pi]]
-                    relevantIdentifierList
-            )
-
-    let mappedTs = 
-        tsList
-        |> List.map (fun ts -> 
+            // Restrict the variables to those that are actually used in the program
             {
-                TransitionSystemWithPrinter.TransitionSystem = TransitionSystem.mapVariables (fun (var, index) -> var + "@" + string(index)) ts.TransitionSystem
+                TransitionSystemWithPrinter.TransitionSystem = restrictVariables (variablesPerTraceVariable.[pi]) ts.TransitionSystem
+                // Add a printer for each state which just prints the ID
                 Printer = ts.Printer
-            })
-            
-    let mappedFormula = 
-        formula
-        |> HyperQPTL.map (fun (var, index) -> var + "@" + string(index))
+            }
 
-    mappedTs, mappedFormula
+        )
+
+    tsMap
 

@@ -52,6 +52,10 @@ type ModelCheckingOptions =
         IntermediateAutomatonSimplification : bool
         BlockProduct : bool // During the product construction, use the block of quantifier of the same type
 
+        FlattenBooleanExpressions : bool
+
+        UnfoldAtomicExpressions : bool
+
         Mode : Mode
     }
 
