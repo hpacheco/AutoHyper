@@ -124,7 +124,7 @@ let convertSymbolicSystemInstance (logger: Logger) (systemList : list<SymbolicSy
     tsList
 
 
-let convertBooleanProgramInstance (progList : list<BooleanProgram>) (formula : HyperQPTL<string * int>) : list<TransitionSystem<string> * Map<int, string>> * HyperQPTL<string> =
+let convertBooleanProgramInstance (progList : list<BooleanProgram>) (formula : HyperQPTL<string * int>) =
     match HyperQPTL.findError formula with
     | None -> ()
     | Some msg -> raise <| AutoHyperException $"Error in the specification: %s{msg}"
@@ -210,8 +210,11 @@ let convertBooleanProgramInstance (progList : list<BooleanProgram>) (formula : H
 
     let mappedTs = 
         tsList
-        |> List.map (fun (ts, printer) -> 
-            TransitionSystem.mapVariables (fun (var, index) -> var + "@" + string(index)) ts, printer)
+        |> List.map (fun ts -> 
+            {
+                TransitionSystemWithPrinter.TransitionSystem = TransitionSystem.mapVariables (fun (var, index) -> var + "@" + string(index)) ts.TransitionSystem
+                Printer = ts.Printer
+            })
             
     let mappedFormula = 
         formula

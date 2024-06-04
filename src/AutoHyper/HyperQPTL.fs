@@ -332,7 +332,7 @@ module Parser =
     let parseHyperQPTLBooleanProgram s =
         let varParser = 
             tuple2 
-                (TransitionSystemLib.BooleanProgramSystem.Parser.variableParser .>> spaces .>> skipChar ',')
+                (TransitionSystemLib.BooleanProgramSystem.Parser.variableParser .>> spaces .>> skipChar '@')
                 (pint32 .>> spaces)
 
         parseHyperQPTL varParser s

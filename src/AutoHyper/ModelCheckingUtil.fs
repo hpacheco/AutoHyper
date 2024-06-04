@@ -45,7 +45,7 @@ let convertToHyperLTL (tsMap : Map<TraceVariable, TransitionSystem<string>>) (fo
     let modifiedTsMap = 
         (tsMap, propVars)
         ||> List.fold (fun m q -> 
-            Map.add q dummySystem m
+            Map.add ("_" + q) dummySystem m
             )
 
     let hyperltl = 
@@ -55,7 +55,7 @@ let convertToHyperLTL (tsMap : Map<TraceVariable, TransitionSystem<string>>) (fo
                 |> List.map (
                     function
                     | TraceQuantifier(q, pi) -> q, pi
-                    | PropQuantifier(q, p) -> q, p
+                    | PropQuantifier(q, p) -> q, "_" + p
                 )
             LTLMatrix =
                 formula.LTLMatrix
@@ -63,7 +63,7 @@ let convertToHyperLTL (tsMap : Map<TraceVariable, TransitionSystem<string>>) (fo
                     AtomExpression.map (
                         function
                         | TraceAtom(var, pi) -> var, pi
-                        | PropAtom p -> "a", p
+                        | PropAtom p -> "a", "_" + p
                     )
                 )
         }

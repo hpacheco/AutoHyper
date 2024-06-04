@@ -88,9 +88,9 @@ type InputType =
 type CommandLineArguments =
     {
         InputType : InputType
-        InputFiles : option<list<String> * String>
+        InputFiles : option<list<string> * string>
         Verify : bool
-        WriteExplicitInstance : option<list<String> * String>
+        WriteExplicitInstance : bool
 
         Mode : Mode
 
@@ -99,7 +99,7 @@ type CommandLineArguments =
         IntermediateAutomatonSimplification : bool
 
         LogPrintouts : bool // If set to true, we log intermediate steps to the console
-        RaiseExceptions : bool // If set to true, we raise esceptions
+        RaiseExceptions : bool // If set to true, we raise exceptions
     }
 
     static member Default =
@@ -107,7 +107,7 @@ type CommandLineArguments =
             InputType = SymbolicSystem
             InputFiles = None
             Verify = true
-            WriteExplicitInstance = None
+            WriteExplicitInstance = false
 
             Mode = INCL SPOT
 
@@ -152,29 +152,17 @@ let parseCommandLineArguments (args : list<string>) =
             | "--incl-forq" -> parseArgumentsRec xs { opt with Mode = INCL SPOT_FORQ }
             | "--comp" -> parseArgumentsRec xs { opt with Mode = COMP }
             //
-            | "--write-explicit" ->
-                let args, ys = splitByPredicate (fun (x : String) -> x.[0] = '-') xs
-
-                if List.length args < 2 then
-                    Result.Error "Option --write-explicit must be followed by at least two arguments"
-                else
-                    let propertyFile = args[args.Length - 1]
-                    let systemFiles = args[0 .. args.Length - 2]
-
-                    parseArgumentsRec
-                        ys
-                        { opt with
-                            WriteExplicitInstance = Some(systemFiles, propertyFile)
-                        }
+            | "--write-explicit" -> parseArgumentsRec xs { opt with WriteExplicitInstance = true }
+            //
             | "--log" -> parseArgumentsRec xs { opt with LogPrintouts = true }
             | "--no-verification" -> parseArgumentsRec xs { opt with Verify = false }
             | "--witness" -> parseArgumentsRec xs { opt with ComputeWitnesses = true }
             | "--no-bisim" -> parseArgumentsRec xs { opt with ComputeBisimulation = false }
-            | "--no-simplification" ->
+            | "--simplification" ->
                 parseArgumentsRec
                     xs
                     { opt with
-                        IntermediateAutomatonSimplification = false
+                        IntermediateAutomatonSimplification = true
                     }
             //
             | "--help"
@@ -194,7 +182,7 @@ let parseCommandLineArguments (args : list<string>) =
                 if opt.InputFiles.IsSome then
                     Result.Error "Input files cannot be given more than once"
                 else
-                    let args, ys = splitByPredicate (fun (y : String) -> y.[0] = '-') (x :: xs)
+                    let args, ys = splitByPredicate (fun (y : string) -> y.[0] = '-') (x :: xs)
 
                     if List.length args < 2 then
                         Result.Error "The input must consist of at least two arguments"

@@ -20,6 +20,8 @@ module Program
 open System
 open System.IO
 
+open TransitionSystemLib.TransitionSystem
+
 open Util
 open Configuration
 open AutomataUtil
@@ -32,41 +34,37 @@ let mutable raiseExceptions = false
 
 let sw = System.Diagnostics.Stopwatch()
 
+
 let private writeFormulaAndSystemString
     config
-    (systemInputPaths : list<string>)
-    (systemOutputPaths : list<string>)
-    formulaOutputPath
-    tsList
+    (tsMap : Map<TraceVariable, TransitionSystem<string>>)
     formula
     =
 
     config.Logger.LogN $"> Writing explicit-state instance to file"
     sw.Restart()
 
-    if systemOutputPaths.Length <> systemInputPaths.Length then
-        raise
-        <| AutoHyperException "The number of output files must match the number of input"
+    formula
+    |> HyperQPTL.quantifiedTraceVariables
+    |> List.iter (fun pi -> 
+        
+        let tsString = TransitionSystemLib.TransitionSystem.TransitionSystem.print id tsMap.[pi]
 
-    let tsStringList =
-        tsList
-        |> List.map (TransitionSystemLib.TransitionSystem.TransitionSystem.print id)
+        let path = "sys" + "_" + pi + ".txt"
+
+        try
+            File.WriteAllText(path, tsString)
+        with _ ->
+            raise <| AutoHyperException $"Could not write to file %s{path}"
+        )
 
     let formulaString = HyperQPTL.print id formula
-
-    (systemOutputPaths, tsStringList)
-    ||> List.zip
-    |> List.iter (fun (file, tsString) ->
-        try
-            File.WriteAllText(file, tsString)
-        with _ ->
-            raise <| AutoHyperException $"Could not write to file %s{file}"
-    )
+    let formulaPath = "prop.txt"
 
     try
-        File.WriteAllText(formulaOutputPath, formulaString)
+        File.WriteAllText(formulaPath, formulaString)
     with _ ->
-        raise <| AutoHyperException $"Could not write to file %s{formulaOutputPath}"
+        raise <| AutoHyperException $"Could not write to file %s{formulaPath}"
 
     config.Logger.LogN(
         $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
@@ -198,13 +196,13 @@ let private run (args : array<string>) =
             let tsListWithPrinter = 
                 tsList
                 |> List.map (fun ts -> 
-                    
-                    let printer = 
-                        ts.States
-                        |> Seq.map (fun x -> x, string x)
-                        |> Map.ofSeq
-
-                    ts, printer
+                    {
+                        TransitionSystemWithPrinter.TransitionSystem = ts 
+                        Printer = 
+                            ts.States
+                            |> Seq.map (fun x -> x, string x)
+                            |> Map.ofSeq
+                    }
                     )
 
             config.Logger.LogN
@@ -213,7 +211,7 @@ let private run (args : array<string>) =
             tsListWithPrinter, formula
 
     config.Logger.LogN
-        ("> system-sizes: [" + (tsList |> List.map (fun (ts, _) -> string ts.States.Count) |> String.concat "," ) + "]")
+        ("> system-sizes: [" + (tsList |> List.map (fun ts -> string ts.TransitionSystem.States.Count) |> String.concat "," ) + "]")
 
     let traceVarList = HyperQPTL.quantifiedTraceVariables formula
 
@@ -230,35 +228,38 @@ let private run (args : array<string>) =
 
             let bisim =
                 tsList
-                |> List.map (fun (ts, _) ->
-                    TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts
-                    |> fst
+                |> List.map (fun ts ->
+                    {
+                        TransitionSystemWithPrinter.TransitionSystem = 
+                            TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts.TransitionSystem
+                            |> fst
+                        Printer = Map.empty
+                    }
+                    
                 )
 
             config.Logger.LogN(
                 $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
 
             config.Logger.LogN
-                ("> system-sizes: [" + (bisim |> List.map (fun ts -> string ts.States.Count) |> String.concat "," ) + "]")
+                ("> system-sizes: [" + (bisim |> List.map (fun ts -> string ts.TransitionSystem.States.Count) |> String.concat "," ) + "]")
 
             bisim
-            // Add an empty printer map
-            |> List.map (fun ts -> ts, Map.empty)
         else
             tsList
 
 
     let tsMap =
         if tsList.Length = 1 then
-            traceVarList |> List.map (fun x -> x, fst tsList.[0]) |> Map.ofList
+            traceVarList |> List.map (fun x -> x, tsList.[0].TransitionSystem) |> Map.ofList
         else
-            (traceVarList, tsList |> List.map fst) ||> List.zip |> Map.ofList
+            (traceVarList, tsList |> List.map (fun x -> x.TransitionSystem)) ||> List.zip |> Map.ofList
 
     let printerMap =
         if tsList.Length = 1 then
-            traceVarList |> List.map (fun x -> x, snd tsList.[0]) |> Map.ofList
+            traceVarList |> List.map (fun x -> x, tsList.[0].Printer) |> Map.ofList
         else
-            (traceVarList, tsList |> List.map snd) ||> List.zip |> Map.ofList
+            (traceVarList, tsList |> List.map (fun x -> x.Printer)) ||> List.zip |> Map.ofList
 
     match ModelCheckingUtil.findErrorOnModelCheckingInstance tsMap formula with
     | None -> ()
@@ -267,10 +268,8 @@ let private run (args : array<string>) =
     config.Logger.LogN $"=================================================="
     config.Logger.LogN ""
 
-    match cmdArgs.WriteExplicitInstance with
-    | None -> ()
-    | Some(systemOutputPaths, formulaOutputPath) ->
-        writeFormulaAndSystemString config systemInputPaths systemOutputPaths formulaOutputPath (tsList |> List.map fst) formula
+    if cmdArgs.WriteExplicitInstance then
+        writeFormulaAndSystemString config tsMap formula
 
 
     if cmdArgs.Verify then
@@ -316,7 +315,6 @@ let private run (args : array<string>) =
 let main args =
     try
         run args
-        //run [|"--explicit"; "--log"; "/Users/ravenbeutner/Documents/Cispa/Projects/PublicRepos/autohyper/AutoHyper/test/system2.txt"; "/Users/ravenbeutner/Documents/Cispa/Projects/PublicRepos/autohyper/AutoHyper/test/prop2.txt"; "--witness"|]
     with
     | AutoHyperException err ->
         printfn "=========== ERROR ==========="
