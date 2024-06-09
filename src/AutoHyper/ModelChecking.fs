@@ -432,7 +432,7 @@ let private checkInclusionByInclusion
                 nba
 
         | SPOT_FORQ ->
-            ExplicitAutomaton.isContainedForklift
+            FsOmegaLib.Operations.AutomataChecks.isContainedForq
                 config.RaiseExceptions
                 config.SolverConfig.MainPath
                 config.SolverConfig.AutfiltPath
@@ -440,9 +440,8 @@ let private checkInclusionByInclusion
                 nba
 
         | RABIT ->
-            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA selfComposition
-            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba
-
+            let enba1, enba2 = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
+    
             if config.SolverConfig.RabitJarPath |> Option.isNone then
                 raise
                 <| AutoHyperException "Required RABIT for inclusion check, but no path to RABIT is given"
@@ -454,8 +453,7 @@ let private checkInclusionByInclusion
                 enba1
                 enba2
         | BAIT ->
-            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA selfComposition
-            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba
+            let enba1, enba2 = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
 
             if config.SolverConfig.BaitJarPath |> Option.isNone then
                 raise
@@ -468,8 +466,7 @@ let private checkInclusionByInclusion
                 enba1
                 enba2
         | FORKLIFT ->
-            let enba1 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA selfComposition
-            let enba2 = ExplicitAutomaton.ExplicitNBA.convertFromSymbolicNBA nba
+            let enba1, enba2 = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
 
             if config.SolverConfig.ForkliftJarPath |> Option.isNone then
                 raise

@@ -19,26 +19,24 @@ module ExplicitAutomaton
 
 open System
 open System.IO
+open System.Collections.Generic
 
 open Util
 open Configuration
-open FsOmegaLib.SAT
-open FsOmegaLib.AbstractAutomaton
 open FsOmegaLib.NBA
 open FsOmegaLib.Operations
 
-open FsOmegaLib.Operations
-
-type ExplicitNBA<'T, 'L when 'T: comparison> = {
-    States: Set<'T>
-    InitialState: 'T
-    Alphabet: list<'L>
-    Edges: Map<'T, list<int * 'T>>
-    AcceptingStates: Set<'T>
-}
+type ExplicitNBA<'T, 'L when 'T : comparison> =
+    {
+        States : Set<'T>
+        InitialState : 'T
+        Alphabet : list<'L>
+        Edges : Map<'T, list<int * 'T>>
+        AcceptingStates : Set<'T>
+    }
 
 module ExplicitNBA =
-    let convertStatesToInt (nba: ExplicitNBA<'T, 'L>) =
+    let convertStatesToInt (nba : ExplicitNBA<'T, 'L>) =
         let idDict = nba.States |> Seq.mapi (fun i x -> x, i) |> Map.ofSeq
 
         {
@@ -57,7 +55,7 @@ module ExplicitNBA =
             AcceptingStates = nba.AcceptingStates |> Set.map (fun x -> idDict.[x])
         }
 
-    let toBAString (stateStringer: 'T -> String) (alphStringer: 'L -> String) (nba: ExplicitNBA<'T, 'L>) =
+    let toBAString (stateStringer : 'T -> String) (alphStringer : 'L -> String) (nba : ExplicitNBA<'T, 'L>) =
         let s = new StringWriter()
 
         s.WriteLine(stateStringer (nba.InitialState))
@@ -77,70 +75,122 @@ module ExplicitNBA =
 
         s.ToString()
 
-    let convertFromSymbolicNBA (nba: NBA<'T, 'L>) =
-        let alphabet = Util.computeBooleanPowerSet (nba.APs.Length) |> Seq.toList
+    let convertPairToExplicitNBA (config : Configuration) (nba1 : NBA<int, 'L>) (nba2 : NBA<int, 'L>) =
+        assert (nba1.APs = nba1.APs)
 
-        let idDict = nba.States |> Seq.mapi (fun i x -> x, i + 1) |> Map.ofSeq
+        let hoaString1, hoaString2, revDict = AutomataUtil.stringifyAutomatonPair nba1 nba2
 
-        let newStates = set [ 0 .. nba.States.Count ]
-
-        let newEdges =
-            nba.Skeleton.Edges
-            |> Map.toSeq
-            |> Seq.map (fun (k, v) ->
-                let sucs =
-                    v
-                    |> List.map (fun (g, t) ->
-                        [ 0 .. alphabet.Length - 1 ]
-                        |> List.choose (fun i ->
-                            if DNF.eval (fun j -> alphabet.[i].[j]) g then
-                                Some(i, idDict.[t])
-                            else
-                                None
-                        )
-                    )
-                    |> List.concat
-
-                idDict.[k], sucs
+        let resNba1 =
+            FsOmegaLib.Operations.AutomataUtil.operateHoaToNBA
+                config.RaiseExceptions
+                config.SolverConfig.MainPath
+                config.SolverConfig.AutfiltPath
+                [ "--split-edges" ]
+                Effort.HIGH
+                (fun x -> revDict.[x])
+                hoaString1
+            |> AutomataOperationResult.defaultWith (fun err ->
+                config.Logger.LogN err.DebugInfo
+                raise <| AutoHyperException err.Info
             )
-            |> Map.ofSeq
 
-        let initSucs =
-            nba.InitialStates
-            |> Set.toList
-            |> List.map (fun s ->
-                nba.Edges.[s]
-                |> List.map (fun (g, t) ->
-                    [ 0 .. alphabet.Length - 1 ]
-                    |> List.choose (fun i ->
-                        if DNF.eval (fun j -> alphabet.[i].[j]) g then
-                            Some(i, idDict.[t])
-                        else
-                            None
-                    )
+        let resNba2 =
+            FsOmegaLib.Operations.AutomataUtil.operateHoaToNBA
+                config.RaiseExceptions
+                config.SolverConfig.MainPath
+                config.SolverConfig.AutfiltPath
+                [ "--split-edges" ]
+                Effort.HIGH
+                (fun x -> revDict.[x])
+                hoaString2
+            |> AutomataOperationResult.defaultWith (fun err ->
+                config.Logger.LogN err.DebugInfo
+                raise <| AutoHyperException err.Info
+            )
+
+        assert (resNba1.InitialStates.Count = 1)
+        assert (resNba2.InitialStates.Count = 1)
+
+
+        let resNba1, resNba2 = FsOmegaLib.NBA.NBA.bringPairToSameAPs resNba1 resNba2
+
+        let alphabetDict = new Dictionary<_, _>()
+        let mutable currentId = 0
+
+        let getId dnf =
+            if dnf = [ [] ] then
+                // This is the true DNF, we need to unfold it explicitly after the processing is done
+                -1
+            elif alphabetDict.ContainsKey dnf then
+                alphabetDict.[dnf]
+            else
+                let res = currentId
+                currentId <- currentId + 1
+                alphabetDict.Add(dnf, res)
+                res
+
+        let edges1 =
+            resNba1.Edges |> Map.map (fun _ l -> l |> List.map (fun (g, t) -> getId g, t))
+
+        let edges2 =
+            resNba2.Edges |> Map.map (fun _ l -> l |> List.map (fun (g, t) -> getId g, t))
+
+        let alphabet = [ 0 .. currentId - 1 ]
+
+
+        // Unfold all the true edges
+        let edges1 =
+            edges1
+            |> Map.map (fun _ l ->
+                l
+                |> List.collect (fun (g, t) ->
+                    if g = -1 then
+                        // This is a true edge, replace it with all possible letters
+                        alphabet |> List.map (fun l -> l, t)
+                    else
+                        [ g, t ]
                 )
-                |> List.concat
             )
-            |> List.concat
 
-        let newEdges = newEdges |> Map.add 0 initSucs
+        let edges2 =
+            edges2
+            |> Map.map (fun _ l ->
+                l
+                |> List.collect (fun (g, t) ->
+                    if g = -1 then
+                        // This is a true edge, replace it with all possible letters
+                        alphabet |> List.map (fun l -> l, t)
+                    else
+                        [ g, t ]
+                )
+            )
 
-        let newAcceptingStates =
-            nba.AcceptingStates |> Set.map (fun x -> idDict.[x]) |> Set.add 0
+        let explicitNba1 =
+            {
+                ExplicitNBA.States = resNba1.States
+                InitialState = resNba1.InitialStates |> Seq.head
+                Alphabet = [ 0 .. currentId - 1 ]
+                Edges = edges1
+                AcceptingStates = resNba1.AcceptingStates
+            }
 
-        {
-            ExplicitNBA.States = newStates
-            InitialState = 0
-            Edges = newEdges
-            Alphabet = alphabet
-            AcceptingStates = newAcceptingStates
-        }
+        let explicitNba2 =
+            {
+                ExplicitNBA.States = resNba2.States
+                InitialState = resNba2.InitialStates |> Seq.head
+                Alphabet = [ 0 .. currentId - 1 ]
+                Edges = edges2
+                AcceptingStates = resNba2.AcceptingStates
+            }
+
+        explicitNba1, explicitNba2
+
 
 module AutomataChecks =
 
     exception private AutomatonCheckException of FsOmegaLibError
 
-    let checkNBAContainmentBait debug mainPath baitPath (enba1: ExplicitNBA<int, 'L>) (enba2: ExplicitNBA<int, 'L>) =
+    let checkNBAContainmentBait debug mainPath baitPath (enba1 : ExplicitNBA<int, 'L>) (enba2 : ExplicitNBA<int, 'L>) =
         try
             assert (enba1.Alphabet = enba2.Alphabet)
 
@@ -175,39 +225,43 @@ module AutomataChecks =
                 elif c.Contains "Inclusion holds: false" then
                     FsOmegaLib.Operations.AutomataOperationResult.Success false
                 else
-                    FsOmegaLib.Operations.AutomataOperationResult.Fail {
-                        Info = $"Error by BAIT"
-                        DebugInfo = $"Unexpected output by BAIT; (containment); %s{c}"
-                    }
+                    FsOmegaLib.Operations.AutomataOperationResult.Fail
+                        {
+                            Info = $"Error by BAIT"
+                            DebugInfo = $"Unexpected output by BAIT; (containment); %s{c}"
+                        }
             | { ExitCode = exitCode; Stderr = stderr } ->
                 if exitCode <> 0 && exitCode <> 1 then
                     raise
-                    <| AutomatonCheckException {
-                        Info = $"Unexpected exit code by BAIT"
-                        DebugInfo = $"Unexpected exit code by BAIT; (containsment); %i{exitCode}"
-                    }
+                    <| AutomatonCheckException
+                        {
+                            Info = $"Unexpected exit code by BAIT"
+                            DebugInfo = $"Unexpected exit code by BAIT; (containment); %i{exitCode}"
+                        }
                 else
                     raise
-                    <| AutomatonCheckException {
-                        Info = $"Error by BAIT"
-                        DebugInfo = $"Error by BAIT; (containment); %s{stderr}"
-                    }
+                    <| AutomatonCheckException
+                        {
+                            Info = $"Error by BAIT"
+                            DebugInfo = $"Error by BAIT; (containment); %s{stderr}"
+                        }
 
         with
         | _ when debug -> reraise ()
         | AutomatonCheckException err -> Fail(err)
         | e ->
-            Fail {
-                Info = $"Unexpected error"
-                DebugInfo = $"Unexpected error; (BAIT, containment); %s{e.Message}"
-            }
+            Fail
+                {
+                    Info = $"Unexpected error"
+                    DebugInfo = $"Unexpected error; (BAIT, containment); %s{e.Message}"
+                }
 
     let checkNBAContainmentRabit
-        (debug: bool)
+        (debug : bool)
         mainPath
         rabitPath
-        (enba1: ExplicitNBA<'T, 'L>)
-        (enba2: ExplicitNBA<'T, 'L>)
+        (enba1 : ExplicitNBA<'T, 'L>)
+        (enba2 : ExplicitNBA<'T, 'L>)
         =
         try
             assert (enba1.Alphabet = enba2.Alphabet)
@@ -244,39 +298,43 @@ module AutomataChecks =
                 elif c.Contains "Included." then
                     FsOmegaLib.Operations.AutomataOperationResult.Success true
                 else
-                    FsOmegaLib.Operations.AutomataOperationResult.Fail {
-                        Info = $"Error by RABIT"
-                        DebugInfo = $"Unexpected output by RABIT; (containment); %s{c}"
-                    }
+                    FsOmegaLib.Operations.AutomataOperationResult.Fail
+                        {
+                            Info = $"Error by RABIT"
+                            DebugInfo = $"Unexpected output by RABIT; (containment); %s{c}"
+                        }
             | { ExitCode = exitCode; Stderr = stderr } ->
                 if exitCode <> 0 && exitCode <> 1 then
                     raise
-                    <| AutomatonCheckException {
-                        Info = $"Unexpected exit code by RABIT"
-                        DebugInfo = $"Unexpected exit code by RABIT;  (containsment); %i{exitCode}"
-                    }
+                    <| AutomatonCheckException
+                        {
+                            Info = $"Unexpected exit code by RABIT"
+                            DebugInfo = $"Unexpected exit code by RABIT;  (containsment); %i{exitCode}"
+                        }
                 else
                     raise
-                    <| AutomatonCheckException {
-                        Info = $"Error by RABIT"
-                        DebugInfo = $"Error by RABIT; (containment); %s{stderr}"
-                    }
+                    <| AutomatonCheckException
+                        {
+                            Info = $"Error by RABIT"
+                            DebugInfo = $"Error by RABIT; (containment); %s{stderr}"
+                        }
 
         with
         | _ when debug -> reraise ()
         | AutomatonCheckException err -> Fail(err)
         | e ->
-            Fail {
-                Info = $"Unexpected error"
-                DebugInfo = $"Unexpected error; (RABIT, containment); %s{e.Message}"
-            }
+            Fail
+                {
+                    Info = $"Unexpected error"
+                    DebugInfo = $"Unexpected error; (RABIT, containment); %s{e.Message}"
+                }
 
     let checkNBAContainmentForklift
         debug
         mainPath
         forkliftPath
-        (enba1: ExplicitNBA<'T, 'L>)
-        (enba2: ExplicitNBA<'T, 'L>)
+        (enba1 : ExplicitNBA<'T, 'L>)
+        (enba2 : ExplicitNBA<'T, 'L>)
         =
         try
             assert (enba1.Alphabet = enba2.Alphabet)
@@ -312,92 +370,33 @@ module AutomataChecks =
                 elif c.Contains "OUTPUT:true" then
                     FsOmegaLib.Operations.AutomataOperationResult.Success true
                 else
-                    FsOmegaLib.Operations.AutomataOperationResult.Fail {
-                        Info = $"Error by FORKLIFT"
-                        DebugInfo = $"Unexpected output by FORKLIFT; (containment); %s{c}"
-                    }
+                    FsOmegaLib.Operations.AutomataOperationResult.Fail
+                        {
+                            Info = $"Error by FORKLIFT"
+                            DebugInfo = $"Unexpected output by FORKLIFT; (containment); %s{c}"
+                        }
             | { ExitCode = exitCode; Stderr = stderr } ->
                 if exitCode <> 0 && exitCode <> 1 then
                     raise
-                    <| AutomatonCheckException {
-                        Info = $"Unexpected exit code by FORKLIFT"
-                        DebugInfo = $"Unexpected exit code by FORKLIFT;  (containsment); %i{exitCode}"
-                    }
+                    <| AutomatonCheckException
+                        {
+                            Info = $"Unexpected exit code by FORKLIFT"
+                            DebugInfo = $"Unexpected exit code by FORKLIFT;  (containsment); %i{exitCode}"
+                        }
                 else
                     raise
-                    <| AutomatonCheckException {
-                        Info = $"Error by FORKLIFT"
-                        DebugInfo = $"Error by FORKLIFT; (containment); %s{stderr}"
-                    }
+                    <| AutomatonCheckException
+                        {
+                            Info = $"Error by FORKLIFT"
+                            DebugInfo = $"Error by FORKLIFT; (containment); %s{stderr}"
+                        }
 
         with
         | _ when debug -> reraise ()
         | AutomatonCheckException err -> Fail(err)
         | e ->
-            Fail {
-                Info = $"Unexpected error"
-                DebugInfo = $"Unexpected error; (FORKLIFT, containment); %s{e.Message}"
-            }
-
-
-
-exception private ConversionException of FsOmegaLibError
-
-// Check inclusion via forklifts inclusion in spot
-let isContainedForklift
-    debug
-    (intermediateFilesPath : string)
-    (autfiltPath : string)
-    (aut1 : AbstractAutomaton<int, 'L>)
-    (aut2 : AbstractAutomaton<int, 'L>)
-    =
-    try
-        let s1, s2, _ = AutomataUtil.stringifyAutomatonPair aut1 aut2
-
-        let path1 = Path.Combine [| intermediateFilesPath; "aut1.hoa" |]
-        let path2 = Path.Combine [| intermediateFilesPath; "aut2.hoa" |]
-
-        File.WriteAllText(path1, s1)
-        File.WriteAllText(path2, s2)
-
-        let arg = "--included-in=" + path2 + " " + path1
-        let res = Util.SubprocessUtil.executeSubprocess (["SPOT_CONTAINMENT_CHECK", "forq"] |> Map.ofList) autfiltPath arg
-
-        match res with
-        | {
-                ExitCode = 0
-                Stderr = ""
-                Stdout = c
-            }
-        | {
-                ExitCode = 1
-                Stderr = ""
-                Stdout = c
-            } ->
-            if c = "" then false else true
-            |> Success
-        | { ExitCode = exitCode; Stderr = stderr } ->
-            if exitCode <> 0 && exitCode <> 1 then
-                raise
-                <| ConversionException
-                    {
-                        Info = $"Unexpected exit code by spot"
-                        DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
-                    }
-            else
-                raise
-                <| ConversionException
-                    {
-                        Info = $"Error by spot"
-                        DebugInfo = $"Error by spot: %s{stderr}"
-                    }
-    with
-    | _ when debug -> reraise ()
-    | ConversionException err -> Fail(err)
-    | e ->
-        Fail
-            {
-                Info = $"Unexpected error"
-                DebugInfo = $"Unexpected error: %s{e.Message}"
-            }
-
+            Fail
+                {
+                    Info = $"Unexpected error"
+                    DebugInfo = $"Unexpected error; (FORKLIFT, containment); %s{e.Message}"
+                }

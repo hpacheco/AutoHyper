@@ -163,6 +163,7 @@ let parseCommandLineArguments (args : list<string>) =
             | "--write-explicit" -> parseArgumentsRec xs { opt with WriteExplicitInstance = true }
             //
             | "--log" -> parseArgumentsRec xs { opt with LogPrintouts = true }
+            | "--debug" -> parseArgumentsRec xs { opt with RaiseExceptions = true }
             | "--no-verification" -> parseArgumentsRec xs { opt with Verify = false }
             | "--witness" -> parseArgumentsRec xs { opt with ComputeWitnesses = true }
             | "--flatten" -> parseArgumentsRec xs { opt with FlattenBooleanExpressions = true }
