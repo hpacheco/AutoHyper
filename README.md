@@ -31,6 +31,7 @@ The newest version of AutoHyper adds support for relational expressions as atomi
 AutoHyper's model-checking algorithm now tracks these relational atoms as succinctly as possible and avoids an unfolding. 
 As a consequence, the input format for AutoHyper changes slightly compared to previous versions. 
 Moreover, AutoHyper now also supports HyperQPTL formulas (i.e., HyperLTL formulas with additional propositional quantification) by integrating the earlier tool AutoHyperQ [5] (now deprecated).
+The newest version of AutoHyper can also produce witness paths for the outermost quantifier block (where applicable). 
 
 
 
