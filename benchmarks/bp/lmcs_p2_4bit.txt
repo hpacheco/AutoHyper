@@ -1,9 +1,0 @@
-h : 4;
-l : 4;
-o : 4;
-
-o = 4 * true;
-while(true) {
-    l = *;
-    o = l;
-}

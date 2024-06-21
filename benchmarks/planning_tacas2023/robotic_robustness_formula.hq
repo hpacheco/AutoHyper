@@ -1,0 +1,21 @@
+exists A. forall B.
+
+    (F
+        {"GOAL"_A}
+    )
+&
+    (G
+        (
+            ({"act"_A=1} <-> {"act"_B=1})
+            &
+            ({"act"_A=2} <-> {"act"_B=2})
+            &
+            ({"act"_A=3} <-> {"act"_B=3})
+            &
+            ({"act"_A=4} <-> {"act"_B=4})
+        )
+        -> 
+        (F
+            {"GOAL"_B}
+        )
+    )
