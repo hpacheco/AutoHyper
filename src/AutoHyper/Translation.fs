@@ -31,9 +31,9 @@ open Configuration
 open AtomExpression
 open HyperQPTL
 
-
 type TransitionSystemType =
     | ExplicitStateSystem of TransitionSystem<string>
+    | ExplicitStateSystemProduct of TransitionSystem<string * TraceVariable>
     | SymbolicSystem of SymbolicSystem
     | BooleanProgram of BooleanProgram
 
@@ -123,7 +123,7 @@ let convertToTransitionSystems (logger : Logger) (systemMap : Map<TraceVariable,
             match TransitionSystem.findError ts with
             | None -> ()
             | Some msg -> raise <| AutoHyperException $"Error in the '{pi}' system: %s{msg}"
-
+        | ExplicitStateSystemProduct _ -> raise <| AutoHyperException $"Product should not be converted"
         | SymbolicSystem sys ->
             match SymbolicSystem.findError logger.LogN sys with
             | None -> ()
@@ -167,6 +167,7 @@ let convertToTransitionSystems (logger : Logger) (systemMap : Map<TraceVariable,
 
             let ts =
                 match s with
+                | ExplicitStateSystemProduct _ -> raise <| AutoHyperException $"Product should not be converted"
                 | ExplicitStateSystem ts ->
                     {
                         TransitionSystemWithPrinter.TransitionSystem = ts
@@ -239,4 +240,13 @@ let convertToTransitionSystems (logger : Logger) (systemMap : Map<TraceVariable,
         )
 
     tsMap
+
+let addPrinter (ts : TransitionSystem<'L>) : TransitionSystemWithPrinter<'L> =
+    {
+        TransitionSystemWithPrinter.TransitionSystem = ts
+        // Add a printer for each state which just prints the ID
+        Printer = ts.States |> Seq.map (fun x -> x, string x) |> Map.ofSeq
+    }
+
+
 

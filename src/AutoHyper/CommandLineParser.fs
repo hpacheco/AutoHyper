@@ -40,7 +40,8 @@ let private helpMessage =
 
     system-options:
     --nusmv             The systems as explicit state systems as NuSMV systems (default).
-    --exp               The systems as explicit state systems.
+    --explicit          The systems as explicit state systems.
+    --explicitprod      The systems as a product of explicit state systems.
     --bp                The systems as explicit state systems as boolean programs.
 
     runtime-options:
@@ -84,6 +85,7 @@ type InputType =
     | SymbolicSystem
     | BooleanProgramSystem
     | ExplicitSystem
+    | ExplicitSystemProduct
 
 type CommandLineArguments =
     {
@@ -146,6 +148,7 @@ let parseCommandLineArguments (args : list<string>) =
             match x with
             | "--nusmv" -> parseArgumentsRec xs { opt with InputType = SymbolicSystem }
             | "--explicit" -> parseArgumentsRec xs { opt with InputType = ExplicitSystem }
+            | "--explicitprod" -> parseArgumentsRec xs { opt with InputType = ExplicitSystemProduct }
             | "--bp" ->
                 parseArgumentsRec
                     xs

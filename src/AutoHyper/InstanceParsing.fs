@@ -19,6 +19,8 @@ module InstanceParsing
 
 open System.IO
 
+open TransitionSystemLib.TransitionSystem
+
 open Util
 open HyperQPTL
 
@@ -121,4 +123,51 @@ let readAndParseExplicitInstance systemInputPaths formulaInputPath =
 
     explicitTsList, formula
 
+let transitionSystemProduct (ts : TransitionSystem<string>) : TransitionSystem<string * TraceVariable> =
+    
+    let toHyper (s : string) : (string * TraceVariable) =
+            let openBracket = s.IndexOf('[')
+            let closeBracket = s.IndexOf(']')
+            if openBracket > 0 && closeBracket > openBracket then
+                let iden = s.Substring(0, openBracket)
+                let proj = s.Substring(openBracket + 1, closeBracket - openBracket - 1)
+                (iden, proj)
+            else
+                failwith $"Invalid format: %s{s}"
+    
+    TransitionSystem.mapVariables toHyper ts
+
+let readAndParseExplicitInstanceProduct systemInputPaths formulaInputPath =
+    let explicitTsProd =
+        match systemInputPaths with
+        | [systemInputPath] -> 
+            let s = 
+                    try
+                        File.ReadAllText systemInputPath
+                    with _ ->
+                        raise <| AutoHyperException $"Could not open/read file %s{systemInputPath}"
+            let ts =
+                    TransitionSystemLib.TransitionSystem.Parser.parseTransitionSystem s
+                    |> Result.defaultWith (fun msg ->
+                        raise
+                        <| AutoHyperException $"The product explicit-state transition system could not be parsed: %s{msg}"
+                    )
+            transitionSystemProduct ts
+        | _ -> raise <| AutoHyperException $"Only one input should be provided"
+        
+    let propContent =
+        try
+            File.ReadAllText formulaInputPath
+        with _ ->
+            raise <| AutoHyperException $"Could not open/read file %s{formulaInputPath}"
+
+
+    let formula =
+        HyperQPTL.Parser.parseHyperQPTLExplicitSystem propContent
+        |> Result.defaultWith (fun msg ->
+            raise
+            <| AutoHyperException $"The HyperQPTL formula could not be parsed: %s{msg}"
+        )
+
+    explicitTsProd, formula
 

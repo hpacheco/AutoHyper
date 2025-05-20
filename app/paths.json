@@ -1,4 +1,4 @@
 {
     "autfilt":"<...>/autfilt",
-    "ltl2tgba":"<...>/ltl2tgba"
+    "ltl2tgba":"/opt/homebrew/bin/ltl2tgba"
 }

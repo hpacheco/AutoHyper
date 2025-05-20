@@ -34,7 +34,7 @@ type private FoundCycle<'T> (state:'T) =
     member this.State = state
 
 
-let nestedDEFS (nba : NBA<'T, 'L>) =
+let nestedDEFS (nba : NBA<'T, 'L>) : (Lasso<'T>) option =
     let satEdges =
         nba.Edges |> Map.map (fun _ l -> l |> List.filter (fun (g, _) -> DNF.isSat g))
 

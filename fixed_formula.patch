@@ -1,0 +1,16 @@
+diff --git a/Operations.fs b/Operations.fs
+index 0fc1eeb..46d97c5 100644
+--- a/Operations.fs
++++ b/Operations.fs
+@@ -626,8 +626,9 @@ module AutomataUtil =
+         =
+         try
+             let targetPath = Path.Combine [| intermediateFilesPath; "autRes.hoa" |]
+-
+-            let arg = args + " " + $"\"{formula}\"" + " -o " + targetPath
++            let formulaPath = Path.Combine [| intermediateFilesPath; "formula.ltl" |]
++            File.WriteAllText(formulaPath, formula)
++            let arg = args + " -F " + formulaPath + " -o " + targetPath
+ 
+             let res = Util.SubprocessUtil.executeSubprocess Map.empty ltl2tgbaPath arg
+ 

@@ -29,13 +29,14 @@ open Configuration
 open AtomExpression
 open HyperQPTL
 open HyperLTL
+open ProductConstruction
 
 exception private FoundError of String
 
 
-let convertToHyperLTL (tsMap : Map<TraceVariable, TransitionSystem<string>>) (formula : HyperQPTL<string>) =
+let convertToHyperLTL (tsMap : TransitionSystems<string>) (formula : HyperQPTL<string>) =
     let propVars = HyperQPTL.quantifiedPropVariables formula
-
+    
     let dummySystem = 
         {
             TransitionSystem.States = set [0; 1]
@@ -44,13 +45,7 @@ let convertToHyperLTL (tsMap : Map<TraceVariable, TransitionSystem<string>>) (fo
             Edges = [ (0, set [0; 1]); (1, set [0; 1]) ] |> Map.ofList
             VariableEval = [ (0, ["a", VariableValue.BoolValue true] |> Map.ofList); (1, ["a", VariableValue.BoolValue false] |> Map.ofList) ] |> Map.ofList
         }
-
-    let modifiedTsMap = 
-        (tsMap, propVars)
-        ||> List.fold (fun m q -> 
-            Map.add ("_" + q) dummySystem m
-            )
-
+    
     let hyperltl = 
         {
             HyperLTL.QuantifierPrefix =
@@ -70,32 +65,56 @@ let convertToHyperLTL (tsMap : Map<TraceVariable, TransitionSystem<string>>) (fo
                     )
                 )
         }
-
-    modifiedTsMap, hyperltl
+    
+    match tsMap with
+    | TransitionProduct p ->
+        if (List.isEmpty propVars) then
+            TransitionProduct p, hyperltl
+        else
+            raise <| AutoHyperException $"QPTL formulas not yet supported for explicit product"
+            
+    | TransitionMap mm -> 
+        let modifiedTsMap = 
+                (mm, propVars)
+                ||> List.fold (fun m q -> 
+                    Map.add ("_" + q) dummySystem m
+                    )
+        TransitionMap modifiedTsMap, hyperltl
 
     
-let findErrorOnModelCheckingInstance (tsMap : Map<TraceVariable, TransitionSystem<'L>>) (formula : HyperQPTL<'L>) =
+let findErrorOnModelCheckingInstance (tsMap : TransitionSystems<'L>) (formula : HyperQPTL<'L>) =
     try
         match HyperQPTL.findError formula with
         | None -> ()
         | Some msg -> raise <| FoundError $"Error in the HyperQPTL formula: %s{msg}"
 
-        tsMap
-        |> Map.iter (fun pi x ->
-            match TransitionSystem.findError x with
-            | None -> ()
-            | Some msg ->
-                raise
-                <| FoundError $"Error in the transition system for trace variable {pi}: %s{msg}"
-        )
+        match tsMap with
+        | TransitionMap m -> 
+            m
+            |> Map.iter (fun pi x ->
+                match TransitionSystem.findError x with
+                | None -> ()
+                | Some msg ->
+                    raise
+                    <| FoundError $"Error in the transition system for trace variable {pi}: %s{msg}"
+            )
+        | TransitionProduct p -> 
+                match TransitionSystem.findError p with
+                | None -> ()
+                | Some msg ->
+                    raise
+                    <| FoundError $"Error in the product transition system: %s{msg}"
 
         let traceVariables = HyperQPTL.quantifiedTraceVariables formula
 
-        traceVariables
-        |> List.iter (fun pi ->
-            if Map.containsKey pi tsMap |> not then
-                raise <| FoundError $"No system for trace variable '{pi}' was given"
-        )
+        match tsMap with
+        | TransitionMap m -> 
+            traceVariables
+            |> List.iter (fun pi ->
+                if Map.containsKey pi m |> not then
+                    raise <| FoundError $"No system for trace variable '{pi}' was given"
+            )
+        | TransitionProduct _ -> ()
 
         formula.LTLMatrix
         |> LTL.allAtoms
@@ -105,13 +124,17 @@ let findErrorOnModelCheckingInstance (tsMap : Map<TraceVariable, TransitionSyste
                 |> AtomExpression.inferType (function 
                     | PropAtom _ -> AtomVariableType.Bool
                     | TraceAtom (var, pi) -> 
-                        match Map.tryFind var tsMap.[pi].VariableType with
-                        | None ->
-                            raise
-                            <| FoundError
-                                $"Variable '({var}, {pi})' was used in an atomic expression but '{var}' is not declared in the system for '{pi}'"
-                        | Some(TransitionSystemLib.TransitionSystem.VariableType.Bool) -> AtomVariableType.Bool
-                        | Some(TransitionSystemLib.TransitionSystem.VariableType.Int) -> AtomVariableType.Int
+                        let ty =
+                                match tsMap with
+                                | TransitionMap m -> Map.tryFind var m.[pi].VariableType
+                                | TransitionProduct p -> Map.tryFind (var,pi) p.VariableType
+                        match ty with
+                            | None ->
+                                raise
+                                <| FoundError
+                                    $"Variable '({var}, {pi})' was used in an atomic expression but '{var}' is not declared in the system for '{pi}'"
+                            | Some(TransitionSystemLib.TransitionSystem.VariableType.Bool) -> AtomVariableType.Bool
+                            | Some(TransitionSystemLib.TransitionSystem.VariableType.Int) -> AtomVariableType.Int
                 )
 
             if t <> Some Bool then
@@ -123,40 +146,56 @@ let findErrorOnModelCheckingInstance (tsMap : Map<TraceVariable, TransitionSyste
         Some msg
 
 
-let computeBisimulationQuotients (logger : Logger) (tsMap : Map<TraceVariable, TransitionSystemWithPrinter<string>>) = 
+let computeBisimulationQuotients (logger : Logger) (tsMap : TransitionSystemsWithPrinter<string>) = 
     let sw = System.Diagnostics.Stopwatch()
 
-    let quotientDict = new Dictionary<_, _>()
-
     let bisimTsMap =
-        tsMap
-        |> Map.map (fun _ ts -> 
-            logger.LogN $"> Computing bisimulation quotients..."
-            sw.Restart()
-
-            let bisimTs = 
-
-                if quotientDict.ContainsKey ts.TransitionSystem then
-                    let res = quotientDict.[ts.TransitionSystem]
-                    logger.LogN $"  ...hashed (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
-                    res
-                else
-                    let bisimTs = 
-                        TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts.TransitionSystem
+        match tsMap with
+        | TransitionMapWithPrinter m -> 
+            let quotientDict = new Dictionary<_, _>()
+            m |> Map.map (fun _ ts -> 
+                logger.LogN $"> Computing bisimulation quotients..."
+                sw.Restart()
+            
+                let bisimTs = 
+            
+                    if quotientDict.ContainsKey ts.TransitionSystem then
+                        let res = quotientDict.[ts.TransitionSystem]
+                        logger.LogN $"  ...hashed (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+                        res
+                    else
+                        let bisimTs = 
+                            TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient ts.TransitionSystem
+                            |> fst
+            
+                        quotientDict.Add(ts.TransitionSystem, bisimTs)
+            
+                        logger.LogN(
+                            $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
+            
+                        bisimTs
+            
+                {
+                    TransitionSystemWithPrinter.TransitionSystem = bisimTs
+                    Printer = Map.empty
+                }
+            ) |> TransitionMapWithPrinter
+        | TransitionProductWithPrinter p ->
+                logger.LogN $"> Computing bisimulation quotients..."
+                sw.Restart()
+            
+                let bisim = 
+                        TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient p.TransitionSystem
                         |> fst
-
-                    quotientDict.Add(ts.TransitionSystem, bisimTs)
-
-                    logger.LogN(
-                        $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
-
-                    bisimTs
-
-            {
-                TransitionSystemWithPrinter.TransitionSystem = bisimTs
-                Printer = Map.empty
-            }
-        )
+            
+            
+                logger.LogN(
+                    $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
+            
+                {
+                    TransitionSystemWithPrinter.TransitionSystem = bisim
+                    Printer = Map.empty
+                } |> TransitionProductWithPrinter
 
     bisimTsMap
 

@@ -29,6 +29,7 @@ open AtomExpression
 open HyperQPTL
 open HyperLTL
 open AutomataUtil
+open ProductConstruction
 
 
 
@@ -132,7 +133,7 @@ module PossiblyNegatedAutomaton =
 
 let rec private generateAutomatonUpToLastBlockRec
     (config : Configuration)
-    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (tsMap : TransitionSystems<'L>)
     (quantifierPrefix : list<QuantifierType * TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     =
@@ -180,11 +181,18 @@ let rec private generateAutomatonUpToLastBlockRec
         sw.Restart()
 
         let restrictedTsMap =
-            eliminationPrefix |> List.map (fun (_, pi) -> pi, tsMap.[pi]) |> Map.ofList
+            match tsMap with
+                | TransitionProduct p -> TransitionProduct p
+                | TransitionMap m -> TransitionMap (eliminationPrefix |> List.map (fun (_, pi) -> pi, m.[pi]) |> Map.ofList)
 
         let nextAut =
-            ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut restrictedTsMap
-            |> NBA.convertStatesToInt
+            match restrictedTsMap with
+                | TransitionMap m ->
+                    ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut m
+                    |> NBA.convertStatesToInt
+                | TransitionProduct p ->
+                    ProductConstruction.constructAutomatonOfSystemProduct modPossiblyNegatedAut.Aut p
+                    |> NBA.convertStatesToInt
 
         config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
@@ -207,7 +215,7 @@ let rec private generateAutomatonUpToLastBlockRec
 
 let generateAutomatonUpToLastBlock
     (config : Configuration)
-    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (tsMap : TransitionSystems<'L>)
     (quantifierPrefix : list<QuantifierType * TraceVariable>)
     (ltlBody : LTL<AtomExpression<'L * TraceVariable>>)
     =
@@ -285,7 +293,8 @@ let private checkIsEmpty (config : Configuration) (nba : NBA<'T, AtomExpression<
 let private findAcceptingPaths
     (config : Configuration)
     (universalQuantifierPrefix : list<TraceVariable>)
-    (nba : NBA<Map<TraceVariable, int> * int, AtomExpression<'L * TraceVariable>>)
+    (nba : NBA<'Astate, AtomExpression<'L * TraceVariable>>)
+    (nbaStateToInt : TraceVariable -> 'Astate -> int)
     =
 
     config.Logger.LogN "========================= Emptiness Check + Witness ========================="
@@ -310,8 +319,8 @@ let private findAcceptingPaths
 
                 let l =
                     {
-                        Prefix = lasso.Prefix |> List.map (fun (m, _) -> m.[pi])
-                        Loop = lasso.Loop |> List.map (fun (m, _) -> m.[pi])
+                        Prefix = lasso.Prefix |> List.map (fun m -> nbaStateToInt pi m)
+                        Loop = lasso.Loop |> List.map (fun m -> nbaStateToInt pi m)
                     }
 
                 pi, l
@@ -329,7 +338,7 @@ type ModelCheckingResult =
 
 let private checkInclusionByEmptiness
     (config : Configuration)
-    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (tsMap : TransitionSystems<'L>)
     (universalQuantifierPrefix : list<TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     =
@@ -344,45 +353,52 @@ let private checkInclusionByEmptiness
     sw.Restart()
 
     let restrictedTsMap =
-        universalQuantifierPrefix |> List.map (fun pi -> pi, tsMap.[pi]) |> Map.ofList
+        match tsMap with
+        | TransitionProduct p -> TransitionProduct p
+        | TransitionMap m -> TransitionMap (universalQuantifierPrefix |> List.map (fun pi -> pi, m.[pi]) |> Map.ofList)
 
-    let finalAut =
-        ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut restrictedTsMap
+    let finish (finalAut : NBA<'Astate, AtomExpression<'L * TraceVariable>>) (autStateToInt : TraceVariable -> 'Astate -> int) =
 
-    config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
-
-    config.Logger.LogN $"> size: {finalAut.Skeleton.States.Count}"
-    config.Logger.LogN "=================================================="
-    config.Logger.LogN ""
-
-    assert (List.isEmpty finalAut.APs)
-
-    let res =
-        if not config.ModelCheckingOptions.ComputeWitnesses then
-            // Just check for emptiness, we use spot for this to be more efficient
-
-            let isEmpty = checkIsEmpty config finalAut
-
-            // The automaton is negated, so the formula holds iff the automaton is not not empty iff the automaton is empty
-            { IsSat = isEmpty; WitnessPaths = None }
-        else
-            // Check for emptiness and search for witness paths
-
-            let acceptingPaths = findAcceptingPaths config universalQuantifierPrefix finalAut
-
-            match acceptingPaths with
-            | None ->
-                // Automaton is empty, so the formula holds (as we consider the negated automaton)
-                { IsSat = true; WitnessPaths = None }
-            | Some a -> { IsSat = false; WitnessPaths = Some a }
-
-    res
-
-
+        config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
+        
+        config.Logger.LogN $"> size: {finalAut.Skeleton.States.Count}"
+        config.Logger.LogN "=================================================="
+        config.Logger.LogN ""
+        
+        assert (List.isEmpty finalAut.APs)
+        
+        let res =
+            if not config.ModelCheckingOptions.ComputeWitnesses then
+                // Just check for emptiness, we use spot for this to be more efficient
+        
+                let isEmpty = checkIsEmpty config finalAut
+        
+                // The automaton is negated, so the formula holds iff the automaton is not not empty iff the automaton is empty
+                { IsSat = isEmpty; WitnessPaths = None }
+            else
+                // Check for emptiness and search for witness paths
+        
+                let acceptingPaths = findAcceptingPaths config universalQuantifierPrefix finalAut autStateToInt
+        
+                match acceptingPaths with
+                | None ->
+                    // Automaton is empty, so the formula holds (as we consider the negated automaton)
+                    { IsSat = true; WitnessPaths = None }
+                | Some a -> { IsSat = false; WitnessPaths = Some a }
+        
+        res
+    
+    match restrictedTsMap with
+    | TransitionProduct p ->
+        let aut = ProductConstruction.constructAutomatonOfSystemProduct modPossiblyNegatedAut.Aut p
+        finish aut (fun _ (i,_) -> i)
+    | TransitionMap m ->  
+        let aut = ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut m
+        finish aut (fun pi (m,_) -> m.[pi])
 
 let private checkInclusionByInclusion
     (config : Configuration)
-    (tsMap : Map<TraceVariable, TransitionSystem<'L>>)
+    (tsMap : TransitionSystems<'L>)
     (universalQuantifierPrefix : list<TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     (inclusionChecker : InclusionChecker)
@@ -405,12 +421,19 @@ let private checkInclusionByInclusion
     sw.Restart()
 
     let restrictedTsMap =
-        universalQuantifierPrefix |> List.map (fun pi -> pi, tsMap.[pi]) |> Map.ofList
+            match tsMap with
+            | TransitionProduct p -> TransitionProduct p
+            | TransitionMap m -> TransitionMap (universalQuantifierPrefix |> List.map (fun pi -> pi, m.[pi]) |> Map.ofList)
 
     let selfComposition =
-        ProductConstruction.constructSelfCompositionAutomaton restrictedTsMap nba.APs
-        |> NBA.convertStatesToInt
-
+            match restrictedTsMap with
+            | TransitionProduct p -> 
+                ProductConstruction.constructSelfCompositionOfAutomaton p nba.APs
+                |> NBA.convertStatesToInt
+            | TransitionMap m -> 
+                ProductConstruction.constructSelfCompositionAutomaton m nba.APs
+                |> NBA.convertStatesToInt
+    
     config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
     config.Logger.LogN $"> self-composition-size: {selfComposition.States.Count}"
@@ -492,7 +515,7 @@ let private checkInclusionByInclusion
     )
 
 
-let modelCheck (config : Configuration) (tsMap : Map<TraceVariable, TransitionSystem<'L>>) (hyperltl : HyperLTL<'L>) =
+let modelCheck (config : Configuration) (tsMap : TransitionSystems<'L>) (hyperltl : HyperLTL<'L>) =
 
     swTotal.Reset()
     swLTLtoNBA.Reset()
