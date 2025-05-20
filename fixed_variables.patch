@@ -1,0 +1,13 @@
+diff --git a/TransitionSystem.fs b/TransitionSystem.fs
+index 777083d..5156600 100644
+--- a/TransitionSystem.fs
++++ b/TransitionSystem.fs
+@@ -378,7 +378,7 @@ module Parser =
+                 }
+             )
+ 
+-    let variableParser = many1Chars (letter <|> digit <|> pchar '_')
++    let variableParser = many1Chars (letter <|> digit <|> pchar '_' <|> pchar '[' <|> pchar ']')
+ 
+     let parseTransitionSystem (s : string) =
+         let full = transitionSystemParser variableParser .>> spaces .>> eof
