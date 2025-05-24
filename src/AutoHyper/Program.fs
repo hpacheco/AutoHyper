@@ -379,6 +379,7 @@ let main args =
     | e ->
         printfn "=========== ERROR ==========="
         printfn $"{e.Message}"
+        printfn "Stack trace:\n%s" e.StackTrace
         printfn "============================="
 
         if raiseExceptions then
