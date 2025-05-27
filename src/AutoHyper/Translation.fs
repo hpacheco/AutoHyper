@@ -230,9 +230,13 @@ let convertToTransitionSystems (logger : Logger) (systemMap : Map<TraceVariable,
 
                         ts
 
+            let vars = match Map.tryFind pi variablesPerTraceVariable with
+                        | None -> Set.empty
+                        | Some vs -> vs
+
             // Restrict the variables to those that are actually used in the program
             {
-                TransitionSystemWithPrinter.TransitionSystem = restrictVariables (variablesPerTraceVariable.[pi]) ts.TransitionSystem
+                TransitionSystemWithPrinter.TransitionSystem = restrictVariables vars ts.TransitionSystem
                 // Add a printer for each state which just prints the ID
                 Printer = ts.Printer
             }
