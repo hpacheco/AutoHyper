@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <TargetFrameworks Condition="'$(TargetFrameworks)' == '' and '$(DOTNET_VERSION)' == 'net9'">net9.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(TargetFrameworks)' == '' and '$(DOTNET_VERSION)' == 'net8'">net8.0</TargetFrameworks>
+  </PropertyGroup>
+</Project>
