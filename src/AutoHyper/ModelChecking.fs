@@ -133,7 +133,7 @@ module PossiblyNegatedAutomaton =
 
 let rec private generateAutomatonUpToLastBlockRec
     (config : Configuration)
-    (tsMap : TransitionSystems<'L>)
+    (tsMap : Map<TraceVariable,TransitionSystem<'L>>)
     (quantifierPrefix : list<QuantifierType * TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     =
@@ -181,18 +181,12 @@ let rec private generateAutomatonUpToLastBlockRec
         sw.Restart()
 
         let restrictedTsMap =
-            match tsMap with
-                | TransitionProduct p -> TransitionProduct p
-                | TransitionMap m -> TransitionMap (eliminationPrefix |> List.map (fun (_, pi) -> pi, m.[pi]) |> Map.ofList)
+                (eliminationPrefix |> List.map (fun (_, pi) -> pi, tsMap.[pi]) |> Map.ofList)
 
         let nextAut =
-            match restrictedTsMap with
-                | TransitionMap m ->
-                    ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut m
+                    ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut restrictedTsMap
                     |> NBA.convertStatesToInt
-                | TransitionProduct p ->
-                    ProductConstruction.constructAutomatonOfSystemProduct modPossiblyNegatedAut.Aut p
-                    |> NBA.convertStatesToInt
+                
 
         config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
@@ -215,7 +209,7 @@ let rec private generateAutomatonUpToLastBlockRec
 
 let generateAutomatonUpToLastBlock
     (config : Configuration)
-    (tsMap : TransitionSystems<'L>)
+    (tsMap : Map<TraceVariable,TransitionSystem<'L>>)
     (quantifierPrefix : list<QuantifierType * TraceVariable>)
     (ltlBody : LTL<AtomExpression<'L * TraceVariable>>)
     =
@@ -338,7 +332,7 @@ type ModelCheckingResult =
 
 let private checkInclusionByEmptiness
     (config : Configuration)
-    (tsMap : TransitionSystems<'L>)
+    (tsMap : Map<TraceVariable,TransitionSystem<'L>>)
     (universalQuantifierPrefix : list<TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     =
@@ -353,9 +347,7 @@ let private checkInclusionByEmptiness
     sw.Restart()
 
     let restrictedTsMap =
-        match tsMap with
-        | TransitionProduct p -> TransitionProduct p
-        | TransitionMap m -> TransitionMap (universalQuantifierPrefix |> List.map (fun pi -> pi, m.[pi]) |> Map.ofList)
+        (universalQuantifierPrefix |> List.map (fun pi -> pi, tsMap.[pi]) |> Map.ofList)
 
     let finish (finalAut : NBA<'Astate, AtomExpression<'L * TraceVariable>>) (autStateToInt : TraceVariable -> 'Astate -> int) =
 
@@ -388,17 +380,12 @@ let private checkInclusionByEmptiness
         
         res
     
-    match restrictedTsMap with
-    | TransitionProduct p ->
-        let aut = ProductConstruction.constructAutomatonOfSystemProduct modPossiblyNegatedAut.Aut p
-        finish aut (fun _ (i,_) -> i)
-    | TransitionMap m ->  
-        let aut = ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut m
-        finish aut (fun pi (m,_) -> m.[pi])
+    let aut = ProductConstruction.constructAutomatonSystemProduct modPossiblyNegatedAut.Aut restrictedTsMap
+    finish aut (fun pi (restrictedTsMap,_) -> restrictedTsMap.[pi])
 
 let private checkInclusionByInclusion
     (config : Configuration)
-    (tsMap : TransitionSystems<'L>)
+    (tsMap : Map<TraceVariable,TransitionSystem<'L>>)
     (universalQuantifierPrefix : list<TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     (inclusionChecker : InclusionChecker)
@@ -421,17 +408,10 @@ let private checkInclusionByInclusion
     sw.Restart()
 
     let restrictedTsMap =
-            match tsMap with
-            | TransitionProduct p -> TransitionProduct p
-            | TransitionMap m -> TransitionMap (universalQuantifierPrefix |> List.map (fun pi -> pi, m.[pi]) |> Map.ofList)
+            (universalQuantifierPrefix |> List.map (fun pi -> pi, tsMap.[pi]) |> Map.ofList)
 
     let selfComposition =
-            match restrictedTsMap with
-            | TransitionProduct p -> 
-                ProductConstruction.constructSelfCompositionOfAutomaton p nba.APs
-                |> NBA.convertStatesToInt
-            | TransitionMap m -> 
-                ProductConstruction.constructSelfCompositionAutomaton m nba.APs
+                ProductConstruction.constructSelfCompositionAutomaton restrictedTsMap nba.APs
                 |> NBA.convertStatesToInt
     
     config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
@@ -515,7 +495,7 @@ let private checkInclusionByInclusion
     )
 
 
-let modelCheck (config : Configuration) (tsMap : TransitionSystems<'L>) (hyperltl : HyperLTL<'L>) =
+let modelCheck (config : Configuration) (tsMap : Map<TraceVariable,TransitionSystem<'L>>) (hyperltl : HyperLTL<'L>) =
 
     swTotal.Reset()
     swLTLtoNBA.Reset()

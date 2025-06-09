@@ -34,13 +34,14 @@ open ProductConstruction
 exception private FoundError of String
 
 
-let convertToHyperLTL (tsMap : TransitionSystems<string>) (formula : HyperQPTL<string>) =
+let convertToHyperLTL (tsMap : Map<TraceVariable,TransitionSystem<string>>) (formula : HyperQPTL<string>) =
     let propVars = HyperQPTL.quantifiedPropVariables formula
     
     let dummySystem = 
         {
             TransitionSystem.States = set [0; 1]
             InitialStates = set [0; 1]
+            AcceptingStates = None
             VariableType = ["a", TransitionSystemLib.TransitionSystem.VariableType.Bool] |> Map.ofList
             Edges = [ (0, set [0; 1]); (1, set [0; 1]) ] |> Map.ofList
             VariableEval = [ (0, ["a", VariableValue.BoolValue true] |> Map.ofList); (1, ["a", VariableValue.BoolValue false] |> Map.ofList) ] |> Map.ofList
@@ -66,31 +67,21 @@ let convertToHyperLTL (tsMap : TransitionSystems<string>) (formula : HyperQPTL<s
                 )
         }
     
-    match tsMap with
-    | TransitionProduct p ->
-        if (List.isEmpty propVars) then
-            TransitionProduct p, hyperltl
-        else
-            raise <| AutoHyperException $"QPTL formulas not yet supported for explicit product"
-            
-    | TransitionMap mm -> 
-        let modifiedTsMap = 
-                (mm, propVars)
+    let modifiedTsMap = 
+                (tsMap, propVars)
                 ||> List.fold (fun m q -> 
                     Map.add ("_" + q) dummySystem m
                     )
-        TransitionMap modifiedTsMap, hyperltl
+    modifiedTsMap, hyperltl
 
     
-let findErrorOnModelCheckingInstance (tsMap : TransitionSystems<'L>) (formula : HyperQPTL<'L>) =
+let findErrorOnModelCheckingInstance (tsMap : Map<TraceVariable,TransitionSystem<'L>>) (formula : HyperQPTL<'L>) =
     try
         match HyperQPTL.findError formula with
         | None -> ()
         | Some msg -> raise <| FoundError $"Error in the HyperQPTL formula: %s{msg}"
 
-        match tsMap with
-        | TransitionMap m -> 
-            m
+        tsMap
             |> Map.iter (fun pi x ->
                 match TransitionSystem.findError x with
                 | None -> ()
@@ -98,23 +89,14 @@ let findErrorOnModelCheckingInstance (tsMap : TransitionSystems<'L>) (formula : 
                     raise
                     <| FoundError $"Error in the transition system for trace variable {pi}: %s{msg}"
             )
-        | TransitionProduct p -> 
-                match TransitionSystem.findError p with
-                | None -> ()
-                | Some msg ->
-                    raise
-                    <| FoundError $"Error in the product transition system: %s{msg}"
 
         let traceVariables = HyperQPTL.quantifiedTraceVariables formula
 
-        match tsMap with
-        | TransitionMap m -> 
-            traceVariables
+        traceVariables
             |> List.iter (fun pi ->
-                if Map.containsKey pi m |> not then
+                if Map.containsKey pi tsMap |> not then
                     raise <| FoundError $"No system for trace variable '{pi}' was given"
             )
-        | TransitionProduct _ -> ()
 
         formula.LTLMatrix
         |> LTL.allAtoms
@@ -124,10 +106,7 @@ let findErrorOnModelCheckingInstance (tsMap : TransitionSystems<'L>) (formula : 
                 |> AtomExpression.inferType (function 
                     | PropAtom _ -> AtomVariableType.Bool
                     | TraceAtom (var, pi) -> 
-                        let ty =
-                                match tsMap with
-                                | TransitionMap m -> Map.tryFind var m.[pi].VariableType
-                                | TransitionProduct p -> Map.tryFind (var,pi) p.VariableType
+                        let ty = Map.tryFind var tsMap.[pi].VariableType
                         match ty with
                             | None ->
                                 raise
@@ -146,14 +125,12 @@ let findErrorOnModelCheckingInstance (tsMap : TransitionSystems<'L>) (formula : 
         Some msg
 
 
-let computeBisimulationQuotients (logger : Logger) (tsMap : TransitionSystemsWithPrinter<string>) = 
+let computeBisimulationQuotients (logger : Logger) (tsMap : Map<TraceVariable,TransitionSystemWithPrinter<string>>) = 
     let sw = System.Diagnostics.Stopwatch()
 
     let bisimTsMap =
-        match tsMap with
-        | TransitionMapWithPrinter m -> 
             let quotientDict = new Dictionary<_, _>()
-            m |> Map.map (fun _ ts -> 
+            tsMap |> Map.map (fun _ ts -> 
                 logger.LogN $"> Computing bisimulation quotients..."
                 sw.Restart()
             
@@ -179,23 +156,7 @@ let computeBisimulationQuotients (logger : Logger) (tsMap : TransitionSystemsWit
                     TransitionSystemWithPrinter.TransitionSystem = bisimTs
                     Printer = Map.empty
                 }
-            ) |> TransitionMapWithPrinter
-        | TransitionProductWithPrinter p ->
-                logger.LogN $"> Computing bisimulation quotients..."
-                sw.Restart()
-            
-                let bisim = 
-                        TransitionSystemLib.TransitionSystem.TransitionSystem.computeBisimulationQuotient p.TransitionSystem
-                        |> fst
-            
-            
-                logger.LogN(
-                    $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)")
-            
-                {
-                    TransitionSystemWithPrinter.TransitionSystem = bisim
-                    Printer = Map.empty
-                } |> TransitionProductWithPrinter
+            ) 
 
     bisimTsMap
 
@@ -239,6 +200,7 @@ let flattenBooleanExpression (tsMap : Map<TraceVariable, TransitionSystemWithPri
                 {
                     TransitionSystem.States = prevTs.States
                     InitialStates = prevTs.InitialStates
+                    AcceptingStates = prevTs.AcceptingStates
                     VariableType = prevTs.VariableType |> Map.add freshVariableName VariableType.Bool  
                     Edges = prevTs.Edges
                     VariableEval = 

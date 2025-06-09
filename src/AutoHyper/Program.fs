@@ -182,25 +182,6 @@ let private run (args : array<string>) =
                 $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
             tsList |> List.map Translation.ExplicitStateSystem, formula
-        | ExplicitSystemProduct ->
-            config.Logger.LogN $"> Parsing model-checking instance (--explicitprod)..."
-            sw.Restart()
-
-            let tsProd, formula =
-                    InstanceParsing.readAndParseExplicitInstanceProduct systemInputPaths formulaInputPath
-
-            let tsProd =
-                    TransitionSystemLib.TransitionSystem.TransitionSystem.alignWithTypes tsProd
-                    |> Result.defaultWith (fun err ->
-                        raise
-                        <| AutoHyperException
-                            $"Error the product transition system: {err}"
-                    )
-
-            config.Logger.LogN
-                $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
-
-            [Translation.ExplicitStateSystemProduct tsProd], formula
 
     let traceVarList = HyperQPTL.quantifiedTraceVariables formula
 
@@ -211,20 +192,16 @@ let private run (args : array<string>) =
 
     let tsMap =
             match systemList.[0] with
-            | ExplicitStateSystemProduct p -> TransitionProductWithPrinter (Translation.addPrinter p)
             | _ -> 
                 let systemMap =
                         if systemList.Length = 1 then
                             traceVarList |> List.map (fun x -> x, systemList.[0]) |> Map.ofList
                         else
                             (traceVarList, systemList) ||> List.zip |> Map.ofList
-                TransitionMapWithPrinter (Translation.convertToTransitionSystems config.Logger systemMap formula)
+                (Translation.convertToTransitionSystems config.Logger systemMap formula)
         
     let sizes =
-            match tsMap with
-            | TransitionProductWithPrinter p -> string p.TransitionSystem.States.Count
-            | TransitionMapWithPrinter m -> 
-                (traceVarList |> List.map (fun pi -> string m.[pi].TransitionSystem.States.Count) |> String.concat "," )
+                (traceVarList |> List.map (fun pi -> string tsMap.[pi].TransitionSystem.States.Count) |> String.concat "," )
 
     config.Logger.LogN
         ("> system-sizes: [" + sizes + "]")
@@ -232,39 +209,33 @@ let private run (args : array<string>) =
     
     // If desired, we unfold all expression so that all expressions are unary 
     let tsMap, formula = 
-        match tsMap with
-        | TransitionProductWithPrinter _ -> tsMap, formula
-        | TransitionMapWithPrinter m -> 
             if config.ModelCheckingOptions.UnfoldAtomicExpressions then 
                 config.Logger.LogN $"> Unfold atomic expression..."
                 sw.Restart()
             
-                let res1,res2 = ModelCheckingUtil.unfoldAtomicExpressions m formula
+                let res1,res2 = ModelCheckingUtil.unfoldAtomicExpressions tsMap formula
             
                 config.Logger.LogN
                     $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
             
-                TransitionMapWithPrinter res1, res2
+                res1, res2
             else 
-                TransitionMapWithPrinter m, formula
+                tsMap, formula
 
     // If desired, we flatten unary expression by replacing them with fresh Boolean variables
     let tsMap, formula = 
-        match tsMap with
-        | TransitionProductWithPrinter _ -> tsMap, formula
-        | TransitionMapWithPrinter m -> 
             if config.ModelCheckingOptions.FlattenBooleanExpressions then 
                 config.Logger.LogN $"> Flatten unary atomic expressions ..."
                 sw.Restart()
             
-                let res1,res2 = ModelCheckingUtil.flattenBooleanExpression m formula
+                let res1,res2 = ModelCheckingUtil.flattenBooleanExpression tsMap formula
             
                 config.Logger.LogN
                     $"...done (time: %i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
             
-                TransitionMapWithPrinter res1, res2
+                res1, res2
             else 
-                TransitionMapWithPrinter m, formula
+                tsMap, formula
 
    
     let tsMap =
@@ -273,10 +244,7 @@ let private run (args : array<string>) =
                 ModelCheckingUtil.computeBisimulationQuotients config.Logger tsMap
 
             let sizes =
-                    match bisimTsMap with
-                    | TransitionProductWithPrinter p -> string (p.TransitionSystem.States.Count)
-                    | TransitionMapWithPrinter m -> 
-                        (traceVarList |> List.map (fun pi -> string m.[pi].TransitionSystem.States.Count) |> String.concat "," )
+                        (traceVarList |> List.map (fun pi -> string bisimTsMap.[pi].TransitionSystem.States.Count) |> String.concat "," )
                     
             config.Logger.LogN
                 ("> system-sizes: [" + sizes + "]")
@@ -287,17 +255,11 @@ let private run (args : array<string>) =
 
 
     let printState pi x =
-            match tsMap with
-            | TransitionMapWithPrinter m ->
-                match Map.tryFind pi m with
+                match Map.tryFind pi tsMap with
                 | None -> None
                 | Some xs -> Some (xs.Printer.[x])
-            | TransitionProductWithPrinter p -> Some (p.Printer.[x])
 
-    let tsMap =
-            match tsMap with
-            | TransitionMapWithPrinter m -> TransitionMap (m |> Map.map (fun _ ts -> ts.TransitionSystem))
-            | TransitionProductWithPrinter p -> TransitionProduct (p.TransitionSystem)
+    let tsMap = (tsMap |> Map.map (fun _ ts -> ts.TransitionSystem))
 
     match ModelCheckingUtil.findErrorOnModelCheckingInstance tsMap formula with
     | None -> ()
@@ -307,9 +269,7 @@ let private run (args : array<string>) =
     config.Logger.LogN ""
 
     if cmdArgs.WriteExplicitInstance then
-        match tsMap with
-        | TransitionMap m -> writeFormulaAndSystemString config m formula
-        | TransitionProduct _ -> ()
+        writeFormulaAndSystemString config tsMap formula
         
     if cmdArgs.Verify then
         let tsMap, formula = ModelCheckingUtil.convertToHyperLTL tsMap formula

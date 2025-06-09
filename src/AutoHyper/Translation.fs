@@ -33,7 +33,6 @@ open HyperQPTL
 
 type TransitionSystemType =
     | ExplicitStateSystem of TransitionSystem<string>
-    | ExplicitStateSystemProduct of TransitionSystem<string * TraceVariable>
     | SymbolicSystem of SymbolicSystem
     | BooleanProgram of BooleanProgram
 
@@ -42,6 +41,7 @@ let private restrictVariables (variables : Set<'L>) (ts : TransitionSystem<'L>) 
     {
         TransitionSystem.States = ts.States
         InitialStates = ts.InitialStates
+        AcceptingStates = ts.AcceptingStates
         VariableType = ts.VariableType |> Map.filter (fun v _ -> Set.contains v variables)
         Edges = ts.Edges
         VariableEval =
@@ -123,7 +123,6 @@ let convertToTransitionSystems (logger : Logger) (systemMap : Map<TraceVariable,
             match TransitionSystem.findError ts with
             | None -> ()
             | Some msg -> raise <| AutoHyperException $"Error in the '{pi}' system: %s{msg}"
-        | ExplicitStateSystemProduct _ -> raise <| AutoHyperException $"Product should not be converted"
         | SymbolicSystem sys ->
             match SymbolicSystem.findError logger.LogN sys with
             | None -> ()
@@ -167,7 +166,6 @@ let convertToTransitionSystems (logger : Logger) (systemMap : Map<TraceVariable,
 
             let ts =
                 match s with
-                | ExplicitStateSystemProduct _ -> raise <| AutoHyperException $"Product should not be converted"
                 | ExplicitStateSystem ts ->
                     {
                         TransitionSystemWithPrinter.TransitionSystem = ts
