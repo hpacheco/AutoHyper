@@ -63,6 +63,9 @@ let constructAutomatonSystemProduct
     let allStates = new HashSet<_>(initStates)
     let newEdges = new Dictionary<_, _>()
 
+    //let printLTrace (l,t) = l.ToString() + "_" + t
+    printf "%d\n" (nba.APs.Length)
+    //nba.APs |> List.iter (fun x -> printf "%s\n" (AtomExpression.print printLTrace x))
     // The APs in the new automaton will grow dynamically during the construction
     let newAps = new List<_>()
 
@@ -155,12 +158,15 @@ let constructAutomatonSystemProduct
             |> Seq.toList
         
         newEdges.Add(n, sucs)
-
+    let newaps = newAps |> Seq.toList
+    //let printLTrace (l,t) = l.ToString() + "_" + t
+    printf "%d\n" (newaps.Length)
+    //nba.APs |> List.iter (fun x -> printf "%s\n" (AtomExpression.print printLTrace x))
     {
         NBA.Skeleton =
             {
                 AutomatonSkeleton.States = set allStates
-                APs = newAps |> Seq.toList
+                APs = newaps
                 Edges = Util.dictToMap newEdges
             }
         InitialStates = set initStates

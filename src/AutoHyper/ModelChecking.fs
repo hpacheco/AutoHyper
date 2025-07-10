@@ -243,7 +243,6 @@ let generateAutomatonUpToLastBlock
 
     config.Logger.LogN $"> size: {aut.Skeleton.States.Count}"
 
-
     config.Logger.LogN "=================================================="
     config.Logger.LogN ""
 

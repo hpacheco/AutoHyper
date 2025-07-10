@@ -1077,7 +1077,7 @@ module AutomataChecks =
                     <| ConversionException
                         {
                             Info = $"Unexpected exit code by spot"
-                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
+                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode} %s{stderr}"
                         }
                 else
                     raise

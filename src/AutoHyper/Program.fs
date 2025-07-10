@@ -254,10 +254,9 @@ let private run (args : array<string>) =
             tsMap
 
 
-    let printState pi x =
-                match Map.tryFind pi tsMap with
-                | None -> None
-                | Some xs -> Some (xs.Printer.[x])
+    let printerMap =
+            tsMap
+            |> Map.map (fun _ ts -> ts.Printer)
 
     let tsMap = (tsMap |> Map.map (fun _ ts -> ts.TransitionSystem))
 
@@ -292,9 +291,9 @@ let private run (args : array<string>) =
                     let printList l = 
                         l 
                         |> List.map (fun x -> 
-                            match printState pi x with
-                            | Some s -> s
-                            | None -> 
+                            if Map.containsKey pi printerMap then 
+                                printerMap.[pi].[x]
+                            else
                                 // The trace is added during the HyperQPTL to HyperLTL translation
                                 // In the dummy system, state 0 maps to true, state 1 to false
                                 match x with 

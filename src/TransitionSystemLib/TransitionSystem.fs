@@ -235,20 +235,25 @@ module TransitionSystem =
                     Map.values c |> seq |> Some
 
         // We init the partition based only on the AP evaluation of each state
+        let isAcceptingState s =
+                match ts.AcceptingStates with
+                | None -> true
+                | Some accepts -> Set.contains s accepts
+            
         let initStateToPartitionId =
             ts.States
-            |> Seq.groupBy (fun s -> ts.VariableEval.[s])
+            |> Seq.groupBy (fun s -> (ts.VariableEval.[s],isAcceptingState s))
             |> Seq.map snd
             |> Seq.mapi (fun i states -> states |> Seq.map (fun s -> s, i))
             |> Seq.concat
             |> Map.ofSeq
 
-        let rec iterativeSplit (stateToPartitionId : Map<int, int>) =
+        let rec iterativeSplit (stateToPartitionId : Map<int, int>) : Map<int, int> =
             let partitionIDs = stateToPartitionId |> Map.toSeq |> Seq.map snd |> Seq.distinct
 
             let mutable freshId = Seq.max partitionIDs + 1
 
-            // Use lazyness here to not do all the work
+            // Use laziness here to not do all the work
             partitionIDs
             |> Seq.choose (fun id -> splitPartition stateToPartitionId id)
             |> Seq.tryHead
@@ -359,7 +364,7 @@ module Parser =
                     (tuple2 escapedVariableParser (ws >>. pint32 |>> IntValue))
 
             let boolEvalFullParser =
-                let boolParser = stringReturn "true" true <|> stringReturn "false" false
+                let boolParser = stringReturn "true" true <|> stringReturn "false" false <|> stringReturn "t" true <|> stringReturn "f" false
 
                 between
                     (skipChar '(' .>> ws)
@@ -386,7 +391,7 @@ module Parser =
 
         pipe4
             (ws >>. skipString "Variables:" >>. ws >>. variablesTypeParser)
-            (ws >>. skipString "Init:" >>. ws >>. many1 (pint32 .>> ws))
+            (ws >>. skipString "Init:" >>. ws >>. many (pint32 .>> ws))
             (opt (ws >>. skipString "Accepting:" >>. ws >>. many (pint32 .>> ws)))
             (ws >>. skipString "--BODY--" >>. bodyParser .>> ws .>> skipString "--END--")
             (fun variableTypes init accept st ->
@@ -400,7 +405,7 @@ module Parser =
                 }
             )
 
-    let variableParser = many1Chars (letter <|> digit <|> pchar '_' <|> pchar '[' <|> pchar ']')
+    let variableParser = many1Chars (letter <|> digit <|> pchar '#' <|> pchar '_' <|> pchar '-' <|> pchar '[' <|> pchar ']')
 
     let parseTransitionSystem (s : string) =
         let full = transitionSystemParser variableParser .>> spaces .>> eof
