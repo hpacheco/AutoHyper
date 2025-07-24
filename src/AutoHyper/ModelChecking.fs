@@ -19,6 +19,7 @@ module ModelChecking
 
 open FsOmegaLib.LTL
 open FsOmegaLib.NBA
+open FsOmegaLib.SAT
 open FsOmegaLib.Operations
 
 open TransitionSystemLib.TransitionSystem
@@ -321,7 +322,68 @@ let private findAcceptingPaths
             |> Map.ofList
 
         Some pathLassoMap
+    
+let findTraceProduct (nba : NBA<'T,'L>) (lasso : LassoNBA<DNF<'L>>) : Lasso<'T> option
+    =
 
+    let apIndexes : Map<int,'L> = nba.APs |> List.indexed |> List.fold (fun acc (i,n) -> Map.add i n acc) Map.empty 
+    let apIndex (ap : int) : 'L = apIndexes.[ap]
+    let convDnf (dnf : DNF<int>) : DNF<'L> = DNF.map apIndex dnf
+        
+    let rec findStates (checkVisited : bool) (visited: Set<'T>) (ps: DNF<'L> list) (i: 'T) : seq<'T list * 'T> =
+        seq {
+            match ps with
+            | [] -> 
+                yield ([], i)
+            | p::ps ->
+                if ((not checkVisited) || (not (Set.contains i visited))) then
+                    for (dnf,next_i) in nba.Edges.[i] do
+                        if (p = convDnf dnf) then
+                            let visited' = Set.add i visited
+                            let next = findStates false visited' ps next_i
+                            let stutter = findStates true visited' (p::ps) next_i
+                            for (xs, j) in Seq.append next stutter do
+                                yield (i::xs, j)
+        }
+    
+    let rec findLasso (xs: 'T list) (k: 'T) : seq<'T list * 'T list> =
+        seq {
+            match xs with
+            | [] -> ()
+            | x::xs ->
+                let nexts_k = nba.Edges.[k] |> List.map snd |> Set.ofList
+                let foundk = seq {
+                                if Set.contains x nexts_k then
+                                    yield ([], x::xs)
+                            }
+                let continuek = seq {
+                                    for (prefix, lasso) in findLasso xs k do
+                                        yield (x::prefix, lasso)
+                                }
+                yield! (Seq.append foundk continuek)
+        }
+         
+    seq {
+        let is = nba.InitialStates
+        for (prefix', j) in Seq.collect (findStates false Set.empty lasso.Prefix) is do
+            for (suffix', k) in findStates false (Set.ofList prefix') lasso.Cycle j do
+                for (prefix'', suffix'') in findLasso suffix' k do
+                    let accepts = nba.AcceptingStates
+                    if not (Set.intersect accepts (Set.ofList suffix'') |> Set.isEmpty) then
+                        yield (Lasso.make (List.append prefix' prefix'') suffix'')
+    }
+    |> Seq.tryHead
+
+let findTraces (restrictedTsMap : Map<TraceVariable,TransitionSystem<'L>>) (nba : NBA<Map<TraceVariable,int>, AtomExpression<'L * TraceVariable>>) (lasso : LassoNBA<DNF<AtomExpression<'L * TraceVariable>>>)
+        : Map<TraceVariable, Lasso<int>>
+        =
+        match findTraceProduct nba lasso with
+        | None -> 
+            printfn $"did not find source trace for {lasso}\n in system {nba}"
+            Map.empty
+        | Some traces -> 
+            let getTrace (k : TraceVariable) : Lasso<int> = Lasso.map (fun (vs : Map<TraceVariable,int>) -> vs.[k]) traces
+            Map.fold (fun acc k _ -> Map.add k (getTrace k) acc) Map.empty restrictedTsMap
 
 type ModelCheckingResult =
     {
@@ -329,11 +391,18 @@ type ModelCheckingResult =
         WitnessPaths : option<Map<TraceVariable, Lasso<int>>>
     }
 
+let noWitnessModelCheckingResult (b : bool) : ModelCheckingResult =
+    {
+        IsSat = b
+        WitnessPaths = None
+    }
+
 let private checkInclusionByEmptiness
     (config : Configuration)
     (tsMap : Map<TraceVariable,TransitionSystem<'L>>)
     (universalQuantifierPrefix : list<TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
+    : ModelCheckingResult
     =
 
     config.Logger.LogN "========================= Compute final product for emptiness check ========================="
@@ -388,6 +457,7 @@ let private checkInclusionByInclusion
     (universalQuantifierPrefix : list<TraceVariable>)
     (possiblyNegatedAut : PossiblyNegatedAutomaton<'L>)
     (inclusionChecker : InclusionChecker)
+    : ModelCheckingResult
     =
 
     config.Logger.LogN "========================= Inclusion Check ========================="
@@ -409,9 +479,9 @@ let private checkInclusionByInclusion
     let restrictedTsMap =
             (universalQuantifierPrefix |> List.map (fun pi -> pi, tsMap.[pi]) |> Map.ofList)
 
-    let selfComposition =
+    let selfCompositionProduct =
                 ProductConstruction.constructSelfCompositionAutomaton restrictedTsMap nba.APs
-                |> NBA.convertStatesToInt
+    let selfComposition = selfCompositionProduct |> NBA.convertStatesToInt
     
     config.Logger.LogN $"  ...done (%i{sw.ElapsedMilliseconds}ms, %.4f{double (sw.ElapsedMilliseconds) / 1000.0}s)"
 
@@ -426,60 +496,97 @@ let private checkInclusionByInclusion
     let res =
         match inclusionChecker with
         | SPOT ->
-            FsOmegaLib.Operations.AutomataChecks.isContained
-                config.RaiseExceptions
-                config.SolverConfig.MainPath
-                config.SolverConfig.AutfiltPath
-                selfComposition
-                nba
+            let res = FsOmegaLib.Operations.AutomataChecks.isContained
+                        config.RaiseExceptions
+                        config.SolverConfig.MainPath
+                        config.SolverConfig.AutfiltPath
+                        selfComposition
+                        nba
+            res |> AutomataOperationResult.mapValue noWitnessModelCheckingResult
 
         | SPOT_FORQ ->
-            FsOmegaLib.Operations.AutomataChecks.isContainedForq
-                config.RaiseExceptions
-                config.SolverConfig.MainPath
-                config.SolverConfig.AutfiltPath
-                selfComposition
-                nba
-
+            let res = FsOmegaLib.Operations.AutomataChecks.isContainedForq
+                        config.RaiseExceptions
+                        config.SolverConfig.MainPath
+                        config.SolverConfig.AutfiltPath
+                        selfComposition
+                        nba
+            res |> AutomataOperationResult.mapValue noWitnessModelCheckingResult
+        | ROLL ->
+            if config.SolverConfig.RollJarPath |> Option.isNone then
+                raise
+                <| AutoHyperException "Required ROLL for inclusion check, but no path to ROLL is given"
+        
+            let res = FsOmegaLib.Operations.AutomataChecks.isContainedRoll
+                        config.RaiseExceptions
+                        config.SolverConfig.MainPath
+                        config.SolverConfig.RollJarPath.Value
+                        selfComposition
+                        nba
+                        config.ModelCheckingOptions.ComputeWitnesses
+            res |> AutomataOperationResult.mapValue (fun (b,w) ->
+                let witness = Option.map (findTraces restrictedTsMap selfCompositionProduct) w
+                {
+                    IsSat = b
+                    WitnessPaths = witness
+                }
+                )
         | RABIT ->
-            let enba1, enba2 = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
+            let enba1, enba2, backMap = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
     
             if config.SolverConfig.RabitJarPath |> Option.isNone then
                 raise
                 <| AutoHyperException "Required RABIT for inclusion check, but no path to RABIT is given"
 
-            ExplicitAutomaton.AutomataChecks.checkNBAContainmentRabit
-                config.RaiseExceptions
-                config.SolverConfig.MainPath
-                config.SolverConfig.RabitJarPath.Value
-                enba1
-                enba2
+            let res = ExplicitAutomaton.AutomataChecks.checkNBAContainmentRabit
+                        config.RaiseExceptions
+                        config.SolverConfig.MainPath
+                        config.SolverConfig.RabitJarPath.Value
+                        enba1
+                        enba2
+                        config.ModelCheckingOptions.ComputeWitnesses
+            res |> AutomataOperationResult.mapValue (fun (b,w) ->
+                let witness = Option.map (findTraces restrictedTsMap selfCompositionProduct << backMap) w
+                {
+                    IsSat = b
+                    WitnessPaths = witness
+                }
+                )
         | BAIT ->
-            let enba1, enba2 = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
+            let enba1, enba2, _ = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
 
             if config.SolverConfig.BaitJarPath |> Option.isNone then
                 raise
                 <| AutoHyperException "Required BAIT for inclusion check, but no path to BAIT is given"
 
-            ExplicitAutomaton.AutomataChecks.checkNBAContainmentBait
-                config.RaiseExceptions
-                config.SolverConfig.MainPath
-                config.SolverConfig.BaitJarPath.Value
-                enba1
-                enba2
+            let res = ExplicitAutomaton.AutomataChecks.checkNBAContainmentBait
+                        config.RaiseExceptions
+                        config.SolverConfig.MainPath
+                        config.SolverConfig.BaitJarPath.Value
+                        enba1
+                        enba2
+            res |> AutomataOperationResult.mapValue noWitnessModelCheckingResult
         | FORKLIFT ->
-            let enba1, enba2 = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
+            let enba1, enba2, backMap = ExplicitAutomaton.ExplicitNBA.convertPairToExplicitNBA config selfComposition nba
 
             if config.SolverConfig.ForkliftJarPath |> Option.isNone then
                 raise
                 <| AutoHyperException "Required FORKLIFT for inclusion check, but no path to FORKLIFT is given"
 
-            ExplicitAutomaton.AutomataChecks.checkNBAContainmentForklift
-                config.RaiseExceptions
-                config.SolverConfig.MainPath
-                config.SolverConfig.ForkliftJarPath.Value
-                enba1
-                enba2
+            let res = ExplicitAutomaton.AutomataChecks.checkNBAContainmentForklift
+                        config.RaiseExceptions
+                        config.SolverConfig.MainPath
+                        config.SolverConfig.ForkliftJarPath.Value
+                        enba1
+                        enba2
+                        config.ModelCheckingOptions.ComputeWitnesses
+            res |> AutomataOperationResult.mapValue (fun (b,w) ->
+                let witness = Option.map (findTraces restrictedTsMap selfCompositionProduct << backMap) w
+                {
+                    IsSat = b
+                    WitnessPaths = witness
+                }
+                )
 
     swInclusion.Stop()
 
@@ -531,11 +638,7 @@ let modelCheck (config : Configuration) (tsMap : Map<TraceVariable,TransitionSys
             
             checkInclusionByEmptiness config tsMap universalQuantifierPrefix possiblyNegatedAut
         | INCL i, false ->
-            {
-                // SAT iff the inclusion holds
-                IsSat = checkInclusionByInclusion config tsMap universalQuantifierPrefix possiblyNegatedAut i
-                WitnessPaths = None
-            }
+            checkInclusionByInclusion config tsMap universalQuantifierPrefix possiblyNegatedAut i
 
     let t =
         {

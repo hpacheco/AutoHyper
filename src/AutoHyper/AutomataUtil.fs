@@ -27,6 +27,17 @@ type Lasso<'L> = { Prefix : list<'L>; Loop : list<'L> }
 
 module Lasso =
     let length (lasso : Lasso<'L>) = lasso.Prefix.Length + lasso.Loop.Length
+    
+    let map (f : 'L -> 'X) (l : Lasso<'L>) =
+            {
+                Prefix = List.map f l.Prefix
+                Loop = List.map f l.Loop
+            }
+    let make (ps : list<'L>) (ss : list<'L>) : Lasso<'L> =
+        {
+            Prefix = ps
+            Loop = ss
+        }
 
 type private FoundCycle<'T> (state:'T) =
     inherit System.Exception ()  

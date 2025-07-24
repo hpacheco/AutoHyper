@@ -327,7 +327,7 @@ module AlternatingAutomatonSkeleton =
 
             let mutable freshId = Seq.max partitionIDs + 1
 
-            // Use lazyness here to not do all the work
+            // Use laziness here to not do all the work
             partitionIDs
             |> Seq.choose (fun id -> splitPartition stateToPartitionId id)
             |> Seq.tryHead

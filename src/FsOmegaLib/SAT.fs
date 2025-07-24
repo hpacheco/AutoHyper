@@ -100,7 +100,8 @@ module Literal =
 
 type DNF<'T when 'T : comparison> = list<list<Literal<'T>>>
 
-module DNF =
+module DNF =        
+
     let isSat (dnf : DNF<'T>) =
         dnf |> List.exists (fun c -> Literal.isConjunctionSat c)
 

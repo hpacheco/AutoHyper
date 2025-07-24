@@ -31,6 +31,7 @@ type SolverConfiguration = {
     BaitJarPath : option<string>
     RabitJarPath : option<string>
     ForkliftJarPath : option<string>
+    RollJarPath : option<string>
 }
 
 type InclusionChecker =
@@ -39,11 +40,19 @@ type InclusionChecker =
     | BAIT
     | FORKLIFT
     | SPOT_FORQ
+    | ROLL
 
 type Mode =
     | COMP
     | INCL of InclusionChecker
 
+let modeSupportsWitness (m:Mode) : bool =
+    match m with
+    | COMP -> true
+    | INCL RABIT -> true
+    | INCL FORKLIFT -> true
+    | INCL ROLL -> true
+    | INCL _ -> false
 
 type ModelCheckingOptions = 
     {
@@ -115,6 +124,14 @@ let private parseSolverConfigurationContent (s : string) =
                 y
                 |> JSON.tryGetString
                 |> Option.defaultWith (fun _ -> raise <| AutoHyperException "Field 'forklift' must contain a string")
+            )
+
+        RollJarPath =
+            (JSON.tryLookup "roll" x)
+            |> Option.map (fun y ->
+                y
+                |> JSON.tryGetString
+                |> Option.defaultWith (fun _ -> raise <| AutoHyperException "Field 'roll' must contain a string")
             )
 
       }

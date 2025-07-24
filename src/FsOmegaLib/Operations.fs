@@ -30,6 +30,55 @@ open NPA
 open NSA
 open APA
 open LTL
+open FsOmegaLib.SAT
+
+type LassoNBA<'T when 'T : comparison> =
+    {
+        Prefix: list<'T>
+        Cycle : list<'T>
+    }
+
+let mapLassoNBA (f : 'A -> 'B) (la : LassoNBA<'A>) : LassoNBA<'B> =
+    {
+        Prefix = List.map f la.Prefix
+        Cycle = List.map f la.Cycle
+    }
+
+let lassoFromNBA (nba : NBA<int,'L>) : LassoNBA<DNF<'L>> =
+    assert (nba.InitialStates.Count = 1)
+    let mutable i = nba.InitialStates |> Set.minElement
+    let mutable rev_prefix = [(i,None)]
+    let mutable stop = false
+    
+    while (not stop) do
+        let nexts = nba.Skeleton.Edges.[i]
+        assert (nexts.Length = 1)
+        let (dnf,j) = nexts[0]
+        if List.exists (fun (k,_) -> k = j) rev_prefix then
+            stop <- true     
+        rev_prefix <- (j,Some dnf) :: rev_prefix
+        i <- j
+    
+    let prefix = List.rev rev_prefix
+    
+    let splitOn p list =
+        let rec go acc = function
+            | [] -> (List.rev acc,[])
+            | x :: xs ->
+                if (p x)
+                    then (List.rev acc,x::xs)
+                    else go (x :: acc) xs    
+        go [] list
+    
+    let (pp,ss) = splitOn (fun (j,_) -> j = i) prefix
+    
+    let convDNF (dnf : DNF<int>) : DNF<'L> =
+        DNF.map (fun i -> List.item i nba.Skeleton.APs) dnf
+    
+    {
+        Prefix = pp |> List.map snd |> List.choose id |> List.map convDNF
+        Cycle = ss |> List.map snd |> List.choose id |> List.map convDNF
+    }
 
 type FsOmegaLibError =
     {
@@ -51,7 +100,11 @@ module AutomataOperationResult =
         match result with
         | Success x -> x
         | Fail err -> defThunk err
-
+    
+    let mapValue (f : 'A -> 'B) (result : AutomataOperationResult<'A>) : AutomataOperationResult<'B> =
+        match result with
+        | Success x -> Success (f x)
+        | Fail err -> Fail err
 
 exception internal ConversionException of FsOmegaLibError
 
@@ -315,7 +368,8 @@ module private HoaConversion =
 
     let resultToNBA (res : string) =
         match HOA.Parser.parseHoaAutomaton res with
-        | Ok hoa -> convertHoaToNBA hoa
+        | Ok hoa -> 
+            convertHoaToNBA hoa
         | Error err ->
             raise
             <| ConversionException
@@ -370,6 +424,29 @@ module private HoaConversion =
 
 
 module AutomataUtil =
+
+    let readHOAToNBA (str : string) : NBA<int,string> =
+        HoaConversion.resultToNBA str
+
+    let singleInitNBA (aut : NBA<int,'L>) : NBA<int,'L> =
+        let skeleton = aut.Skeleton
+        
+        let newState = Set.count skeleton.States
+        let newEdges = Set.toList aut.InitialStates |> List.map (fun i -> (DNF.trueDNF,i)) 
+        
+        let newSkeleton =
+            {
+                States = Set.add newState skeleton.States
+                APs = skeleton.APs
+                Edges = Map.add newState newEdges skeleton.Edges
+            }
+        
+        {
+            Skeleton = newSkeleton
+            InitialStates = Set.add newState Set.empty
+            AcceptingStates = aut.AcceptingStates
+        }
+
     let operateHoaAndParse
         (debug : bool)
         (intermediateFilesPath : string)
@@ -380,7 +457,7 @@ module AutomataUtil =
         =
         try
             let path = Path.Combine [| intermediateFilesPath; "aut1.hoa" |]
-            let targetPath = Path.Combine [| intermediateFilesPath; "autRes.hoa" |]
+            let targetPath = Path.Combine [| intermediateFilesPath; "autRes1.hoa" |]
 
             File.WriteAllText(path, hoaString)
 
@@ -395,8 +472,8 @@ module AutomataUtil =
                     raise
                     <| ConversionException
                         {
-                            Info = $"Unexpected exit code by spot"
-                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
+                            Info = $"Unexpected exit code by spot (operateHoaAndParse)"
+                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode} %s{stderr}"
                         }
                 else
                     raise
@@ -429,7 +506,7 @@ module AutomataUtil =
         try
             let path1 = Path.Combine [| intermediateFilesPath; "aut1.hoa" |]
             let path2 = Path.Combine [| intermediateFilesPath; "aut2.hoa" |]
-            let targetPath = Path.Combine [| intermediateFilesPath; "autRes.hoa" |]
+            let targetPath = Path.Combine [| intermediateFilesPath; "autRes12.hoa" |]
 
             File.WriteAllText(path1, hoaString1)
             File.WriteAllText(path2, hoaString2)
@@ -445,8 +522,8 @@ module AutomataUtil =
                     raise
                     <| ConversionException
                         {
-                            Info = $"Unexpected exit code by spot"
-                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
+                            Info = $"Unexpected exit code by spot (operateHoaAndParsePair)"
+                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode} %s{stderr}"
                         }
                 else
                     raise
@@ -625,7 +702,7 @@ module AutomataUtil =
         (formula : string)
         =
         try
-            let targetPath = Path.Combine [| intermediateFilesPath; "autRes.hoa" |]
+            let targetPath = Path.Combine [| intermediateFilesPath; "autResLTL.hoa" |]
             let formulaPath = Path.Combine [| intermediateFilesPath; "formula.ltl" |]
             File.WriteAllText(formulaPath, formula)
             let arg = args + " -F " + formulaPath + " -o " + targetPath
@@ -639,8 +716,8 @@ module AutomataUtil =
                     raise
                     <| ConversionException
                         {
-                            Info = $"Unexpected exit code by spot"
-                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
+                            Info = $"Unexpected exit code by spot (operateLTLAndParse)"
+                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode} %s{stderr}"
                         }
                 else
                     raise
@@ -1019,8 +1096,8 @@ module AutomataChecks =
                     raise
                     <| ConversionException
                         {
-                            Info = $"Unexpected exit code by spot"
-                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
+                            Info = $"Unexpected exit code by spot (isEmpty)"
+                            DebugInfo = $"Unexpected exit code by spot: %i{exitCode} %s{stderr}"
                         }
                 else
                     raise
@@ -1076,7 +1153,7 @@ module AutomataChecks =
                     raise
                     <| ConversionException
                         {
-                            Info = $"Unexpected exit code by spot"
+                            Info = $"Unexpected exit code by spot (isContained)"
                             DebugInfo = $"Unexpected exit code by spot: %i{exitCode} %s{stderr}"
                         }
                 else
@@ -1139,7 +1216,7 @@ module AutomataChecks =
                     raise
                     <| ConversionException
                         {
-                            Info = $"Unexpected exit code by spot"
+                            Info = $"Unexpected exit code by spot (isContainedForq)"
                             DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
                         }
                 else
@@ -1159,6 +1236,88 @@ module AutomataChecks =
                     DebugInfo = $"Unexpected error: %s{e.Message}"
                 }
 
+    /// Check inclusion using ROLL
+    let isContainedRoll
+        debug
+        (intermediateFilesPath : string)
+        (rollPath : string)
+        (aut1 : NBA<int, 'L>)
+        (aut2 : NBA<int, 'L>)
+        (computeWitness: bool)
+        : AutomataOperationResult< bool * LassoNBA<DNF<'L>> option >
+        =
+        try
+            let s1, s2, revDict = AutomataUtil.stringifyAutomatonPair (AutomataUtil.singleInitNBA aut1) (AutomataUtil.singleInitNBA aut2)
+    
+            let path1 = Path.Combine [| intermediateFilesPath; "aut1_single.hoa" |]
+            let path2 = Path.Combine [| intermediateFilesPath; "aut2_single.hoa" |]
+    
+            File.WriteAllText(path1, s1)
+            File.WriteAllText(path2, s2)
+    
+            let arg = "-jar " + rollPath + " include " + path1 + " " + path2
+
+            let res = Util.SubprocessUtil.executeSubprocess Map.empty "java" arg
+
+            let parseWitness (str : string) : AutomataOperationResult< bool * LassoNBA<DNF<'L>> option > =
+                    let stripUntilSubstring (substring: string) (input: string) =
+                        let index = input.IndexOf(substring)
+                        if index >= 0 then input.Substring(index) else ""
+                    let hoastr = stripUntilSubstring "HOA" str
+                    let nba = AutomataUtil.readHOAToNBA hoastr
+                    let nbaL = NBA.mapAPs (fun s -> revDict.[s]) nba
+                    let lasso = lassoFromNBA nbaL
+                    AutomataOperationResult.Success (false,Some lasso)
+
+            match res with
+            | {
+                  ExitCode = 0
+                  Stderr = ""
+                  Stdout = c
+              }
+            | {
+                  ExitCode = 1
+                  Stderr = ""
+                  Stdout = c
+              } ->
+                if c.Contains "Not Included" then
+                    if computeWitness
+                        then parseWitness c
+                        else AutomataOperationResult.Success (false,None)
+                elif c.Contains "Included" then
+                    AutomataOperationResult.Success (true,None)
+                else
+                    AutomataOperationResult.Fail
+                        {
+                            Info = $"Error by ROLL"
+                            DebugInfo = $"Unexpected output by ROLL; (containment); %s{c}"
+                        }
+            | { ExitCode = exitCode; Stderr = stderr } ->
+                if exitCode <> 0 && exitCode <> 1 then
+                    raise
+                    <| ConversionException
+                        {
+                            Info = $"Unexpected exit code by ROLL"
+                            DebugInfo = $"Unexpected exit code by ROLL;  (containsment); %i{exitCode}"
+                        }
+                else
+                    raise
+                    <| ConversionException
+                        {
+                            Info = $"Error by ROLL"
+                            DebugInfo = $"Error by ROLL; (containment); %s{stderr}"
+                        }
+            
+        with
+        | _ when debug -> reraise ()
+        | ConversionException err -> Fail(err)
+        | e ->
+            Fail
+                {
+                    Info = $"Unexpected error"
+                    DebugInfo = $"Unexpected error: %s{e.Message}"
+                }
+    
 
     let isEquivalent
         debug
@@ -1197,7 +1356,7 @@ module AutomataChecks =
                     raise
                     <| ConversionException
                         {
-                            Info = $"Unexpected exit code by spot"
+                            Info = $"Unexpected exit code by spot (isEquivalent)"
                             DebugInfo = $"Unexpected exit code by spot: %i{exitCode}"
                         }
                 else

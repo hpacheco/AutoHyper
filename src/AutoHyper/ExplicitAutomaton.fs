@@ -24,7 +24,9 @@ open System.Collections.Generic
 open Util
 open Configuration
 open FsOmegaLib.NBA
+open FsOmegaLib.SAT
 open FsOmegaLib.Operations
+open AtomExpression
 
 type ExplicitNBA<'T, 'L when 'T : comparison> =
     {
@@ -114,7 +116,7 @@ module ExplicitNBA =
 
         let resNba1, resNba2 = FsOmegaLib.NBA.NBA.bringPairToSameAPs resNba1 resNba2
 
-        let alphabetDict = new Dictionary<_, _>()
+        let alphabetDict = new Dictionary<DNF<int>, int>()
         let mutable currentId = 0
 
         let getId dnf =
@@ -183,8 +185,17 @@ module ExplicitNBA =
                 AcceptingStates = resNba2.AcceptingStates
             }
 
-        explicitNba1, explicitNba2
-
+        (*revDict |> Seq.iter (fun kvp -> printfn "revDict %A: %A" kvp.Key kvp.Value)*)
+        (*alphabetDict |> Seq.iter (fun kvp -> printfn "alphabetDict %A: %A" kvp.Key kvp.Value)*)
+        
+        let backMap : LassoNBA<int> -> LassoNBA<DNF<'L>> = fun w -> 
+            let apIndexes : Map<int,'L> = resNba1.APs |> List.indexed |> List.fold (fun acc (i,n) -> Map.add i n acc) Map.empty 
+            let apIndex (ap : int) : 'L = apIndexes.[ap]
+            let flippedAlphabetDict : Map<int,DNF<int>> = Seq.fold (fun acc (kv: KeyValuePair<DNF<int>,int>) -> Map.add kv.Value kv.Key acc) Map.empty alphabetDict
+            let labelToAtoms (l : int) : DNF<'L> = DNF.map apIndex (flippedAlphabetDict.[l])
+            mapLassoNBA labelToAtoms w
+        
+        explicitNba1, explicitNba2, backMap
 
 module AutomataChecks =
 
@@ -262,6 +273,8 @@ module AutomataChecks =
         rabitPath
         (enba1 : ExplicitNBA<'T, 'L>)
         (enba2 : ExplicitNBA<'T, 'L>)
+        (computeWitness: bool)
+        : AutomataOperationResult< bool * LassoNBA<int> option >
         =
         try
             assert (enba1.Alphabet = enba2.Alphabet)
@@ -278,9 +291,39 @@ module AutomataChecks =
             File.WriteAllText(path1, s1)
             File.WriteAllText(path2, s2)
 
-            let arg = "-jar " + rabitPath + " " + path1 + " " + path2 + " -fast"
+            let fastmode = if computeWitness then "-fastc" else "-fast"
+            let arg = "-jar " + rabitPath + " " + path1 + " " + path2 + " " + fastmode
 
             let res = Util.SubprocessUtil.executeSubprocess Map.empty "java" arg
+
+            let parseWitness (str : string) : AutomataOperationResult< bool * LassoNBA<int> option > =
+                    let lines = str.Split([|'\n';'\r'|],StringSplitOptions.RemoveEmptyEntries)
+                    let findLine (condition: string -> bool) (lines: string[]) =
+                            let index = lines |> Array.findIndex condition
+                            if index < lines.Length - 1 then Some lines[index]
+                            else None
+                    let condition (s : string) : bool = s.Contains "Counterexample:"
+                    match findLine condition lines with
+                    | Some ws -> 
+                        let arr = ws.Split([| ' '; '\t'; '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+                        let prefix = if arr.Length > 2 then arr[1] else ""
+                        let suffix = if arr.Length > 2 then arr[2] else arr[1]
+                        let prefixes = prefix.Split([| ')'; 'l'; '('|], StringSplitOptions.RemoveEmptyEntries)
+                        let suffixes = suffix.Split([| ')'; 'l'; '('|], StringSplitOptions.RemoveEmptyEntries)
+                        let prefixLabels = prefixes |> Array.toList |> List.map (fun s -> System.Int32.Parse(s[0..]))
+                        let suffixLabels = suffixes |> Array.toList |> List.map (fun s -> System.Int32.Parse(s[0..]))
+                        let lasso =
+                                {
+                                Prefix = prefixLabels
+                                Cycle = suffixLabels
+                                }
+                        FsOmegaLib.Operations.AutomataOperationResult.Success (false,Some lasso)
+                    | None -> 
+                        FsOmegaLib.Operations.AutomataOperationResult.Fail
+                            {
+                                Info = $"Error by RABIT (cannot compute witness)"
+                                DebugInfo = $"Unexpected output by RABIT; (containment); %s{str}"
+                            }
 
             match res with
             | {
@@ -294,9 +337,11 @@ module AutomataChecks =
                   Stdout = c
               } ->
                 if c.Contains "Not included." then
-                    FsOmegaLib.Operations.AutomataOperationResult.Success false
+                    if computeWitness
+                        then parseWitness c
+                        else FsOmegaLib.Operations.AutomataOperationResult.Success (false,None)
                 elif c.Contains "Included." then
-                    FsOmegaLib.Operations.AutomataOperationResult.Success true
+                    FsOmegaLib.Operations.AutomataOperationResult.Success (true,None)
                 else
                     FsOmegaLib.Operations.AutomataOperationResult.Fail
                         {
@@ -335,6 +380,8 @@ module AutomataChecks =
         forkliftPath
         (enba1 : ExplicitNBA<'T, 'L>)
         (enba2 : ExplicitNBA<'T, 'L>)
+        (computeWitness: bool)
+        : AutomataOperationResult< bool * LassoNBA<int> option >
         =
         try
             assert (enba1.Alphabet = enba2.Alphabet)
@@ -354,6 +401,36 @@ module AutomataChecks =
             let arg = "-jar " + forkliftPath + " " + path1 + " " + path2
             let res = Util.SubprocessUtil.executeSubprocess Map.empty "java" arg
 
+            let parseWitness (str : string) : AutomataOperationResult< bool * LassoNBA<int> option > =
+                    let lines = str.Split([|'\n';'\r'|],StringSplitOptions.RemoveEmptyEntries)
+                    let findNextLineAfter (condition: string -> bool) (lines: string[]) =
+                            let index = lines |> Array.findIndex condition
+                            if index < lines.Length - 1 then Some lines[index + 1]
+                            else None
+                    let condition (s : string) : bool = s.Contains "NON-INCLUSION WITNESS"
+                    match findNextLineAfter condition lines with
+                    | Some ws -> 
+                        let arr = ws.Split([| ' '; '\t'; '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+                        let prefix = arr[0]
+                        let suffix = arr[1]
+                        let suffix = suffix[6..suffix.Length-2]
+                        let prefixes = prefix.Split([| ')'; '('|], StringSplitOptions.RemoveEmptyEntries)
+                        let suffixes = suffix.Split([| ')'; '('|], StringSplitOptions.RemoveEmptyEntries)
+                        let prefixLabels = prefixes |> Array.toList |> List.map (fun s -> System.Int32.Parse(s[1..]))
+                        let suffixLabels = suffixes |> Array.toList |> List.map (fun s -> System.Int32.Parse(s[1..]))
+                        let lasso =
+                                {
+                                Prefix = prefixLabels
+                                Cycle = suffixLabels
+                                }
+                        FsOmegaLib.Operations.AutomataOperationResult.Success (false,Some lasso)
+                    | None -> 
+                        FsOmegaLib.Operations.AutomataOperationResult.Fail
+                            {
+                                Info = $"Error by FORKLIFT (cannot compute witness)"
+                                DebugInfo = $"Unexpected output by FORKLIFT; (containment); %s{str}"
+                            }
+
             match res with
             | {
                   ExitCode = 0
@@ -366,9 +443,11 @@ module AutomataChecks =
                   Stdout = c
               } ->
                 if c.Contains "OUTPUT:false" then
-                    FsOmegaLib.Operations.AutomataOperationResult.Success false
+                    if computeWitness
+                        then parseWitness c
+                        else FsOmegaLib.Operations.AutomataOperationResult.Success (false,None)
                 elif c.Contains "OUTPUT:true" then
-                    FsOmegaLib.Operations.AutomataOperationResult.Success true
+                    FsOmegaLib.Operations.AutomataOperationResult.Success (true,None)
                 else
                     FsOmegaLib.Operations.AutomataOperationResult.Fail
                         {

@@ -158,6 +158,7 @@ let parseCommandLineArguments (args : list<string>) =
             | "--incl-forklift" -> parseArgumentsRec xs { opt with Mode = INCL FORKLIFT }
             | "--incl-spot" -> parseArgumentsRec xs { opt with Mode = INCL SPOT }
             | "--incl-forq" -> parseArgumentsRec xs { opt with Mode = INCL SPOT_FORQ }
+            | "--incl-roll" -> parseArgumentsRec xs { opt with Mode = INCL ROLL }
             | "--comp" -> parseArgumentsRec xs { opt with Mode = COMP }
             //
             | "--write-explicit" -> parseArgumentsRec xs { opt with WriteExplicitInstance = true }

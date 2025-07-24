@@ -116,8 +116,8 @@ let private run (args : array<string>) =
                     UnfoldAtomicExpressions = cmdArgs.UnfoldAtomicExpressions
 
                     Mode = 
-                        if cmdArgs.ComputeWitnesses && cmdArgs.Mode <> COMP then 
-                            logger.LogN "! Cannot compute witnesses AND use inclusion checks"
+                        if cmdArgs.ComputeWitnesses && not (modeSupportsWitness cmdArgs.Mode) then 
+                            logger.LogN ("! Mode " + string cmdArgs.Mode + " does NOT support witnesses")
                             logger.LogN "! We have switched to mode '--comp'"
                             COMP 
                         else 
