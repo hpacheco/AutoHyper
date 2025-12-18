@@ -1,8 +1,8 @@
 {
-    "autfilt":"/opt/homebrew/bin/autfilt",
-    "ltl2tgba":"/opt/homebrew/bin/ltl2tgba",
-    "bait":"/Users/hpacheco/Downloads/autohyper/app/bait.jar",
-    "rabit":"/Users/hpacheco/Downloads/autohyper/app/RABIT.jar",
-    "forklift":"/Users/hpacheco/Downloads/autohyper/app/forklift.jar",
-    "roll":"/Users/hpacheco/Downloads/autohyper/app/ROLL.jar"
+    "autfilt":"/root/usr/bin/autfilt",
+    "ltl2tgba":"/root/usr/bin/ltl2tgba",
+    "bait":"/root/usr/bin/bait.jar",
+    "rabit":"/root/usr/bin/rabit.jar",
+    "forklift":"/root/usr/bin/forklift.jar",
+    "roll":"/root/usr/bin/roll.jar"
 }
